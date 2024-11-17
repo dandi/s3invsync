@@ -13,10 +13,7 @@ pub(crate) struct Client {
 
 impl Client {
     #[allow(clippy::unused_async)] // XXX
-    pub(crate) async fn get_manifest(
-        &self,
-        when: InventoryTimestamp,
-    ) -> Result<CsvManifest, GetManifestError> {
+    pub(crate) async fn get_manifest(&self, when: DateHM) -> Result<CsvManifest, GetManifestError> {
         // Get S3 object
         // Stream to temp file while also feeding bytes into MD5 digester
         // Check digest
@@ -46,7 +43,7 @@ pub(crate) enum GetManifestError {
 }
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
-pub(crate) struct InventoryTimestamp {
+pub(crate) struct DateHM {
     year: u16,
     month: u8,
     day: u8,
@@ -54,7 +51,7 @@ pub(crate) struct InventoryTimestamp {
     minute: u8,
 }
 
-impl fmt::Display for InventoryTimestamp {
+impl fmt::Display for DateHM {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
@@ -64,43 +61,43 @@ impl fmt::Display for InventoryTimestamp {
     }
 }
 
-impl FromStr for InventoryTimestamp {
-    type Err = InventoryTimestampError;
+impl FromStr for DateHM {
+    type Err = DateHMError;
 
-    fn from_str(s: &str) -> Result<InventoryTimestamp, InventoryTimestampError> {
-        fn accept(t: &mut &str, c: char) -> Result<(), InventoryTimestampError> {
+    fn from_str(s: &str) -> Result<DateHM, DateHMError> {
+        fn accept(t: &mut &str, c: char) -> Result<(), DateHMError> {
             let Some(t2) = t.strip_prefix(c) else {
-                return Err(InventoryTimestampError);
+                return Err(DateHMError);
             };
             *t = t2;
             Ok(())
         }
 
-        fn parse_u8(t: &mut &str, min: u8, max: u8) -> Result<u8, InventoryTimestampError> {
+        fn parse_u8(t: &mut &str, min: u8, max: u8) -> Result<u8, DateHMError> {
             let Some((ss, t2)) = t.split_at_checked(2) else {
-                return Err(InventoryTimestampError);
+                return Err(DateHMError);
             };
             if !ss.chars().all(|c| c.is_ascii_digit()) {
-                return Err(InventoryTimestampError);
+                return Err(DateHMError);
             }
             let Ok(value) = ss.parse::<u8>() else {
-                return Err(InventoryTimestampError);
+                return Err(DateHMError);
             };
             if !((min..=max).contains(&value)) {
-                return Err(InventoryTimestampError);
+                return Err(DateHMError);
             };
             *t = t2;
             Ok(value)
         }
 
         let Some((year_str, mut s)) = s.split_at_checked(4) else {
-            return Err(InventoryTimestampError);
+            return Err(DateHMError);
         };
         if !year_str.chars().all(|c| c.is_ascii_digit()) {
-            return Err(InventoryTimestampError);
+            return Err(DateHMError);
         }
         let Ok(year) = year_str.parse::<u16>() else {
-            return Err(InventoryTimestampError);
+            return Err(DateHMError);
         };
         accept(&mut s, '-')?;
         let month = parse_u8(&mut s, 1, 12)?;
@@ -112,9 +109,9 @@ impl FromStr for InventoryTimestamp {
         let minute = parse_u8(&mut s, 0, 59)?;
         accept(&mut s, 'Z')?;
         if !s.is_empty() {
-            return Err(InventoryTimestampError);
+            return Err(DateHMError);
         }
-        Ok(InventoryTimestamp {
+        Ok(DateHM {
             year,
             month,
             day,
@@ -125,14 +122,14 @@ impl FromStr for InventoryTimestamp {
 }
 
 #[derive(Copy, Clone, Debug, Eq, Error, PartialEq)]
-#[error("invalid inventory timestamp format; expected YYYY-MM-DDTHH-MMZ")]
-pub(crate) struct InventoryTimestampError;
+#[error("invalid timestamp format; expected YYYY-MM-DDTHH-MMZ")]
+pub(crate) struct DateHMError;
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    mod inventory_timestamp {
+    mod date_hm {
         use super::*;
         use rstest::rstest;
 
@@ -150,7 +147,7 @@ mod tests {
         ) {
             assert_eq!(
                 s.parse(),
-                Ok(InventoryTimestamp {
+                Ok(DateHM {
                     year,
                     month,
                     day,
@@ -172,16 +169,13 @@ mod tests {
         #[case("2024-12-01T01-00")]
         #[case("2024-12-01-01-00Z")]
         fn parse_err(#[case] s: &str) {
-            assert_eq!(
-                s.parse::<InventoryTimestamp>(),
-                Err(InventoryTimestampError)
-            );
+            assert_eq!(s.parse::<DateHM>(), Err(DateHMError));
         }
 
         #[rstest]
-        #[case(InventoryTimestamp {year: 2024, month: 1, day: 1, hour: 0, minute: 0}, "2024-01-01T00-00Z")]
-        #[case(InventoryTimestamp {year: 2024, month: 12, day: 31, hour: 23, minute: 59}, "2024-12-31T23-59Z")]
-        fn display(#[case] it: InventoryTimestamp, #[case] s: &str) {
+        #[case(DateHM {year: 2024, month: 1, day: 1, hour: 0, minute: 0}, "2024-01-01T00-00Z")]
+        #[case(DateHM {year: 2024, month: 12, day: 31, hour: 23, minute: 59}, "2024-12-31T23-59Z")]
+        fn display(#[case] it: DateHM, #[case] s: &str) {
             assert_eq!(it.to_string(), s);
         }
     }
