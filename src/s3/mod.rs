@@ -1,16 +1,18 @@
-use super::manifest::CsvManifest;
-use super::timestamps::{Date, DateHM, DateMaybeHM};
+mod streams;
+use crate::manifest::CsvManifest;
+use crate::timestamps::{Date, DateHM, DateMaybeHM};
+use aws_sdk_s3::Client;
 use thiserror::Error;
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct Client {
-    //inner: aws_sdk_s3 :: Client,
+#[derive(Clone, Debug)]
+pub(crate) struct S3Client {
+    inner: Client,
     region: String,
     inv_bucket: String,
     inv_prefix: String,
 }
 
-impl Client {
+impl S3Client {
     pub(crate) async fn get_manifest_for_date(
         &self,
         when: Option<DateMaybeHM>,

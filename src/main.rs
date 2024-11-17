@@ -1,6 +1,6 @@
 #![allow(unused_imports)] // XXX
-mod client;
 mod manifest;
+mod s3;
 mod timestamps;
 
 fn main() {
