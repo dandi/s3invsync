@@ -9,8 +9,9 @@ use aws_sdk_s3::{
 };
 use aws_smithy_runtime_api::client::{orchestrator::HttpResponse, result::SdkError};
 use futures_util::TryStreamExt;
+use md5::{Digest, Md5};
 use std::fs::File;
-use std::io::Seek;
+use std::io::{BufWriter, Seek, Write};
 use thiserror::Error;
 
 #[derive(Clone, Debug)]
@@ -86,13 +87,13 @@ impl S3Client {
                 source,
             })?
             .to_vec();
-        let checksum = std::str::from_utf8(&checksum_bytes).map_err(|source| {
-            GetManifestError::DecodeChecksum {
+        let checksum = std::str::from_utf8(&checksum_bytes)
+            .map_err(|source| GetManifestError::DecodeChecksum {
                 bucket: self.inv_bucket.clone(),
                 key: checksum_key,
                 source,
-            }
-        })?;
+            })?
+            .trim();
         let manifest_key = join_prefix(&self.inv_prefix, &format!("{when}/manifest.json"));
         let mut manifest_file =
             tempfile::tempfile().map_err(|source| GetManifestError::Tempfile {
@@ -120,19 +121,53 @@ impl S3Client {
         Ok(manifest)
     }
 
-    #[allow(clippy::unused_async)] // XXX
     async fn download_object(
         &self,
         bucket: &str,
         key: &str,
+        // `md5_digest` must be a 32-character lowercase hexadecimal string
         md5_digest: &str,
         outfile: &File,
     ) -> Result<(), DownloadError> {
-        // Get S3 object
-        // Wrap outfile in BufWriter?
-        // Stream to temp file while also feeding bytes into MD5 digester
-        // Check digest
-        todo!()
+        let obj = self.get_object(bucket, key).await?;
+        let mut bytestream = obj.body;
+        let mut outfile = BufWriter::new(outfile);
+        let mut hasher = Md5::new();
+        while let Some(blob) =
+            bytestream
+                .try_next()
+                .await
+                .map_err(|source| DownloadError::Download {
+                    bucket: bucket.to_owned(),
+                    key: key.to_owned(),
+                    source,
+                })?
+        {
+            outfile
+                .write(&blob)
+                .map_err(|source| DownloadError::Write {
+                    bucket: bucket.to_owned(),
+                    key: key.to_owned(),
+                    source,
+                })?;
+            hasher.update(&blob);
+        }
+        outfile.flush().map_err(|source| DownloadError::Write {
+            bucket: bucket.to_owned(),
+            key: key.to_owned(),
+            source,
+        })?;
+        let actual_md5 = hex::encode(hasher.finalize());
+        if actual_md5 != md5_digest {
+            Err(DownloadError::Verify {
+                bucket: bucket.to_owned(),
+                key: key.to_owned(),
+                expected_md5: md5_digest.to_owned(),
+                actual_md5,
+            })
+        } else {
+            Ok(())
+        }
     }
 }
 
@@ -194,9 +229,16 @@ pub(crate) enum DownloadError {
         key: String,
         source: ByteStreamError,
     },
-    #[error("checksum verification for {url} failed; expected {expected_md5}, got {actual_md5}")]
+    #[error("failed writing contents of bucket {bucket:?}, key {key:?} to disk")]
+    Write {
+        bucket: String,
+        key: String,
+        source: std::io::Error,
+    },
+    #[error("checksum verification for object at bucket {bucket:?}, key {key:?} failed; expected MD5 {expected_md5:?}, got {actual_md5:?}")]
     Verify {
-        url: String,
+        bucket: String,
+        key: String,
         expected_md5: String,
         actual_md5: String,
     },

@@ -1389,6 +1389,8 @@ dependencies = [
  "aws-smithy-async",
  "aws-smithy-runtime-api",
  "futures-util",
+ "hex",
+ "md-5",
  "rstest",
  "serde",
  "serde_json",
