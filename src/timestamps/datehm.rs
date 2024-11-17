@@ -2,7 +2,7 @@ use std::fmt;
 use std::str::FromStr;
 use thiserror::Error;
 
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Copy, Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(crate) struct DateHM {
     year: u16,
     month: u8,
