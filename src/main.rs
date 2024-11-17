@@ -1,3 +1,4 @@
+#![allow(unused_imports)] // XXX
 mod client;
 mod manifest;
 mod timestamps;
