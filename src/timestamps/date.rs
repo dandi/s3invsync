@@ -1,3 +1,4 @@
+use super::util::Scanner;
 use std::fmt;
 use std::str::FromStr;
 use thiserror::Error;
@@ -19,47 +20,13 @@ impl FromStr for Date {
     type Err = DateError;
 
     fn from_str(s: &str) -> Result<Date, DateError> {
-        fn accept(t: &mut &str, c: char) -> Result<(), DateError> {
-            let Some(t2) = t.strip_prefix(c) else {
-                return Err(DateError);
-            };
-            *t = t2;
-            Ok(())
-        }
-
-        fn parse_u8(t: &mut &str, min: u8, max: u8) -> Result<u8, DateError> {
-            let Some((ss, t2)) = t.split_at_checked(2) else {
-                return Err(DateError);
-            };
-            if !ss.chars().all(|c| c.is_ascii_digit()) {
-                return Err(DateError);
-            }
-            let Ok(value) = ss.parse::<u8>() else {
-                return Err(DateError);
-            };
-            if !((min..=max).contains(&value)) {
-                return Err(DateError);
-            };
-            *t = t2;
-            Ok(value)
-        }
-
-        let Some((year_str, mut s)) = s.split_at_checked(4) else {
-            return Err(DateError);
-        };
-        if !year_str.chars().all(|c| c.is_ascii_digit()) {
-            return Err(DateError);
-        }
-        let Ok(year) = year_str.parse::<u16>() else {
-            return Err(DateError);
-        };
-        accept(&mut s, '-')?;
-        let month = parse_u8(&mut s, 1, 12)?;
-        accept(&mut s, '-')?;
-        let day = parse_u8(&mut s, 1, 31)?;
-        if !s.is_empty() {
-            return Err(DateError);
-        }
+        let mut scanner = Scanner::new(s, DateError);
+        let year = scanner.scan_year()?;
+        scanner.scan_char('-')?;
+        let month = scanner.scan_u8(1, 12)?;
+        scanner.scan_char('-')?;
+        let day = scanner.scan_u8(1, 31)?;
+        scanner.eof()?;
         Ok(Date { year, month, day })
     }
 }

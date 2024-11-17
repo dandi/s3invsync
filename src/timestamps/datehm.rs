@@ -1,3 +1,4 @@
+use super::util::Scanner;
 use std::fmt;
 use std::str::FromStr;
 use thiserror::Error;
@@ -25,52 +26,18 @@ impl FromStr for DateHM {
     type Err = DateHMError;
 
     fn from_str(s: &str) -> Result<DateHM, DateHMError> {
-        fn accept(t: &mut &str, c: char) -> Result<(), DateHMError> {
-            let Some(t2) = t.strip_prefix(c) else {
-                return Err(DateHMError);
-            };
-            *t = t2;
-            Ok(())
-        }
-
-        fn parse_u8(t: &mut &str, min: u8, max: u8) -> Result<u8, DateHMError> {
-            let Some((ss, t2)) = t.split_at_checked(2) else {
-                return Err(DateHMError);
-            };
-            if !ss.chars().all(|c| c.is_ascii_digit()) {
-                return Err(DateHMError);
-            }
-            let Ok(value) = ss.parse::<u8>() else {
-                return Err(DateHMError);
-            };
-            if !((min..=max).contains(&value)) {
-                return Err(DateHMError);
-            };
-            *t = t2;
-            Ok(value)
-        }
-
-        let Some((year_str, mut s)) = s.split_at_checked(4) else {
-            return Err(DateHMError);
-        };
-        if !year_str.chars().all(|c| c.is_ascii_digit()) {
-            return Err(DateHMError);
-        }
-        let Ok(year) = year_str.parse::<u16>() else {
-            return Err(DateHMError);
-        };
-        accept(&mut s, '-')?;
-        let month = parse_u8(&mut s, 1, 12)?;
-        accept(&mut s, '-')?;
-        let day = parse_u8(&mut s, 1, 31)?;
-        accept(&mut s, 'T')?;
-        let hour = parse_u8(&mut s, 0, 23)?;
-        accept(&mut s, '-')?;
-        let minute = parse_u8(&mut s, 0, 59)?;
-        accept(&mut s, 'Z')?;
-        if !s.is_empty() {
-            return Err(DateHMError);
-        }
+        let mut scanner = Scanner::new(s, DateHMError);
+        let year = scanner.scan_year()?;
+        scanner.scan_char('-')?;
+        let month = scanner.scan_u8(1, 12)?;
+        scanner.scan_char('-')?;
+        let day = scanner.scan_u8(1, 31)?;
+        scanner.scan_char('T')?;
+        let hour = scanner.scan_u8(0, 23)?;
+        scanner.scan_char('-')?;
+        let minute = scanner.scan_u8(0, 59)?;
+        scanner.scan_char('Z')?;
+        scanner.eof()?;
         Ok(DateHM {
             year,
             month,
