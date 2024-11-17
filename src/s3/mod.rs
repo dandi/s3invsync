@@ -17,12 +17,29 @@ use thiserror::Error;
 #[derive(Clone, Debug)]
 pub(crate) struct S3Client {
     inner: Client,
-    region: String,
     inv_bucket: String,
     inv_prefix: String,
 }
 
 impl S3Client {
+    async fn new(region: String, inv_bucket: String, inv_prefix: String) -> S3Client {
+        let config = aws_config::from_env()
+            .app_name(
+                aws_config::AppName::new(env!("CARGO_PKG_NAME"))
+                    .expect("crate name should be a valid app name"),
+            )
+            .no_credentials()
+            .region(aws_config::Region::new(region))
+            .load()
+            .await;
+        let inner = Client::new(&config);
+        S3Client {
+            inner,
+            inv_bucket,
+            inv_prefix,
+        }
+    }
+
     pub(crate) async fn get_manifest_for_date(
         &self,
         when: Option<DateMaybeHM>,

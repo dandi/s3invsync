@@ -15,6 +15,7 @@ exclude = ["/.*"]
 publish = false
 
 [dependencies]
+aws-config = { version = "1.5.10", features = ["behavior-version-latest"] }
 aws-sdk-s3 = "1.61.0"
 aws-smithy-async = "1.2.1"
 aws-smithy-runtime-api = "1.7.3"
