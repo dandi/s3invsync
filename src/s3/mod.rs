@@ -11,7 +11,7 @@ use aws_smithy_runtime_api::client::{orchestrator::HttpResponse, result::SdkErro
 use futures_util::TryStreamExt;
 use md5::{Digest, Md5};
 use std::fs::File;
-use std::io::{BufWriter, Seek, Write};
+use std::io::{BufReader, BufWriter, Seek, Write};
 use thiserror::Error;
 
 #[derive(Clone, Debug)]
@@ -110,13 +110,11 @@ impl S3Client {
                 key: manifest_key.clone(),
                 source,
             })?;
-        let manifest =
-            serde_json::from_reader::<_, CsvManifest>(manifest_file).map_err(|source| {
-                GetManifestError::Parse {
-                    bucket: self.inv_bucket.clone(),
-                    key: manifest_key,
-                    source,
-                }
+        let manifest = serde_json::from_reader::<_, CsvManifest>(BufReader::new(manifest_file))
+            .map_err(|source| GetManifestError::Parse {
+                bucket: self.inv_bucket.clone(),
+                key: manifest_key,
+                source,
             })?;
         Ok(manifest)
     }
