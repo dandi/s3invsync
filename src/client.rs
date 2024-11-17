@@ -12,6 +12,7 @@ pub(crate) struct Client {
 }
 
 impl Client {
+    #[allow(clippy::unused_async)] // XXX
     pub(crate) async fn get_manifest(
         &self,
         when: InventoryTimestamp,
