@@ -1,3 +1,4 @@
+#![allow(dead_code)] // XXX
 #![allow(unused_imports)] // XXX
 mod manifest;
 mod s3;

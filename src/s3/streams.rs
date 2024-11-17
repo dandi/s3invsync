@@ -1,7 +1,9 @@
 use super::S3Client;
 use crate::timestamps::DateHM;
-use aws_sdk_s3::operation::list_objects_v2::ListObjectsV2Output;
-use aws_sdk_s3::{operation::list_objects_v2::ListObjectsV2Error, types::CommonPrefix};
+use aws_sdk_s3::{
+    operation::list_objects_v2::{ListObjectsV2Error, ListObjectsV2Output},
+    types::CommonPrefix,
+};
 use aws_smithy_async::future::pagination_stream::PaginationStream;
 use aws_smithy_runtime_api::client::{orchestrator::HttpResponse, result::SdkError};
 use futures_util::Stream;

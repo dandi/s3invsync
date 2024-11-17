@@ -2,8 +2,15 @@ mod streams;
 use self::streams::{ListManifestDates, ListObjectsError};
 use crate::manifest::CsvManifest;
 use crate::timestamps::{Date, DateHM, DateMaybeHM};
-use aws_sdk_s3::Client;
+use aws_sdk_s3::{
+    operation::get_object::{GetObjectError, GetObjectOutput},
+    primitives::ByteStreamError,
+    Client,
+};
+use aws_smithy_runtime_api::client::{orchestrator::HttpResponse, result::SdkError};
 use futures_util::TryStreamExt;
+use std::fs::File;
+use std::io::Seek;
 use thiserror::Error;
 
 #[derive(Clone, Debug)]
@@ -52,12 +59,79 @@ impl S3Client {
         })
     }
 
-    #[allow(clippy::unused_async)] // XXX
+    async fn get_object(&self, bucket: &str, key: &str) -> Result<GetObjectOutput, GetError> {
+        self.inner
+            .get_object()
+            .bucket(bucket)
+            .key(key)
+            .send()
+            .await
+            .map_err(|source| GetError {
+                bucket: bucket.to_owned(),
+                key: key.to_owned(),
+                source,
+            })
+    }
+
     pub(crate) async fn get_manifest(&self, when: DateHM) -> Result<CsvManifest, GetManifestError> {
+        let checksum_key = join_prefix(&self.inv_prefix, &format!("{when}/manifest.checksum"));
+        let checksum_obj = self.get_object(&self.inv_bucket, &checksum_key).await?;
+        let checksum_bytes = checksum_obj
+            .body
+            .collect()
+            .await
+            .map_err(|source| GetManifestError::DownloadChecksum {
+                bucket: self.inv_bucket.clone(),
+                key: checksum_key.clone(),
+                source,
+            })?
+            .to_vec();
+        let checksum = std::str::from_utf8(&checksum_bytes).map_err(|source| {
+            GetManifestError::DecodeChecksum {
+                bucket: self.inv_bucket.clone(),
+                key: checksum_key,
+                source,
+            }
+        })?;
+        let manifest_key = join_prefix(&self.inv_prefix, &format!("{when}/manifest.json"));
+        let mut manifest_file =
+            tempfile::tempfile().map_err(|source| GetManifestError::Tempfile {
+                bucket: self.inv_bucket.clone(),
+                key: manifest_key.clone(),
+                source,
+            })?;
+        self.download_object(&self.inv_bucket, &manifest_key, checksum, &manifest_file)
+            .await?;
+        manifest_file
+            .rewind()
+            .map_err(|source| GetManifestError::Rewind {
+                bucket: self.inv_bucket.clone(),
+                key: manifest_key.clone(),
+                source,
+            })?;
+        let manifest =
+            serde_json::from_reader::<_, CsvManifest>(manifest_file).map_err(|source| {
+                GetManifestError::Parse {
+                    bucket: self.inv_bucket.clone(),
+                    key: manifest_key,
+                    source,
+                }
+            })?;
+        Ok(manifest)
+    }
+
+    #[allow(clippy::unused_async)] // XXX
+    async fn download_object(
+        &self,
+        bucket: &str,
+        key: &str,
+        md5_digest: &str,
+        outfile: &File,
+    ) -> Result<(), DownloadError> {
         // Get S3 object
+        // Wrap outfile in BufWriter?
         // Stream to temp file while also feeding bytes into MD5 digester
         // Check digest
-        // Parse JSON
         todo!()
     }
 }
@@ -74,10 +148,51 @@ pub(crate) enum FindManifestError {
 pub(crate) enum GetManifestError {
     #[error(transparent)]
     Find(#[from] FindManifestError),
-    #[error("failed to download {url}")]
+    #[error(transparent)]
+    Get(#[from] GetError),
+    #[error(transparent)]
+    Download(#[from] DownloadError),
+    #[error("failed downloading checksum at bucket {bucket:?}, key {key:?}")]
+    DownloadChecksum {
+        bucket: String,
+        key: String,
+        source: ByteStreamError,
+    },
+    #[error("manifest checksum contents at bucket {bucket:?}, key {key:?} are not UTF-8")]
+    DecodeChecksum {
+        bucket: String,
+        key: String,
+        source: std::str::Utf8Error,
+    },
+    #[error("failed to create tempfile for downloading bucket {bucket:?}, key {key:?}")]
+    Tempfile {
+        bucket: String,
+        key: String,
+        source: std::io::Error,
+    },
+    #[error("failed to rewind tempfile after downloading bucket {bucket:?}, key {key:?}")]
+    Rewind {
+        bucket: String,
+        key: String,
+        source: std::io::Error,
+    },
+    #[error("failed to deserialize manifest at bucket {bucket:?}, key {key:?}")]
+    Parse {
+        bucket: String,
+        key: String,
+        source: serde_json::Error,
+    },
+}
+
+#[derive(Debug, Error)]
+pub(crate) enum DownloadError {
+    #[error(transparent)]
+    Get(#[from] GetError),
+    #[error("failed downloading contents for bucket {bucket:?}, key {key:?}")]
     Download {
-        url: String,
-        source: std::io::Error, // TODO: Change to actual error used by SDK
+        bucket: String,
+        key: String,
+        source: ByteStreamError,
     },
     #[error("checksum verification for {url} failed; expected {expected_md5}, got {actual_md5}")]
     Verify {
@@ -85,11 +200,14 @@ pub(crate) enum GetManifestError {
         expected_md5: String,
         actual_md5: String,
     },
-    #[error("failed to deserialize {url}")]
-    Parse {
-        url: String,
-        source: serde_json::Error,
-    },
+}
+
+#[derive(Debug, Error)]
+#[error("failed to get object in bucket {bucket:?} at key {key:?}")]
+pub(crate) struct GetError {
+    bucket: String,
+    key: String,
+    source: SdkError<GetObjectError, HttpResponse>,
 }
 
 fn join_prefix(prefix: &str, suffix: &str) -> String {
