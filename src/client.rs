@@ -1,5 +1,5 @@
 use super::manifest::CsvManifest;
-use super::timestamps::DateHM;
+use super::timestamps::{Date, DateHM, DateMaybeHM};
 use thiserror::Error;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -11,6 +11,35 @@ pub(crate) struct Client {
 }
 
 impl Client {
+    pub(crate) async fn get_manifest_for_date(
+        &self,
+        when: Option<DateMaybeHM>,
+    ) -> Result<CsvManifest, GetManifestError> {
+        let ts = match when {
+            None => self.get_latest_manifest_timestamp().await?,
+            Some(DateMaybeHM::Date(d)) => self.get_latest_manifest_timestamp_within_date(d).await?,
+            Some(DateMaybeHM::DateHM(d)) => d,
+        };
+        self.get_manifest(ts).await
+    }
+
+    #[allow(clippy::unused_async)] // XXX
+    pub(crate) async fn get_latest_manifest_timestamp(&self) -> Result<DateHM, GetManifestError> {
+        // Iterate over `DateHM` prefixes in `s3://{inv_bucket}/{inv_prefix}/`
+        // and return greatest one
+        todo!()
+    }
+
+    #[allow(clippy::unused_async)] // XXX
+    pub(crate) async fn get_latest_manifest_timestamp_within_date(
+        &self,
+        when: Date,
+    ) -> Result<DateHM, GetManifestError> {
+        // Iterate over `DateHM` prefixes in
+        // `s3://{inv_bucket}/{inv_prefix}/{when}T` and return greatest one
+        todo!()
+    }
+
     #[allow(clippy::unused_async)] // XXX
     pub(crate) async fn get_manifest(&self, when: DateHM) -> Result<CsvManifest, GetManifestError> {
         // Get S3 object
