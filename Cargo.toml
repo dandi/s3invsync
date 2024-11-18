@@ -3,7 +3,7 @@ name = "s3invsync"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.82"
-description = "Backup S3 buckets from S3 inventories"
+description = "AWS S3 Inventory-based backup tool with efficient incremental & versionId support"
 authors = [
     "DANDI Developers <team@dandiarchive.org>",
     "John Thorvald Wodder II <dandidav@varonathe.org>",
