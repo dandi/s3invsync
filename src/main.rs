@@ -30,12 +30,11 @@ async fn main() -> anyhow::Result<()> {
         // TODO: Add to pool of concurrent download tasks?
         client.download_inventory_csv(fspec).await?;
         // TODO: For each entry in CSV:
-        // - Download object
-        //  - Verify etag
-        //  - Manage object metadata and old versions
+        // - Download object (in a task pool)
+        // - Manage object metadata and old versions
         // - Handle concurrent downloads of the same key
         todo!()
     }
-    // Handle errors and Ctrl-C
-    todo!()
+    // TODO: Handle error recovery and Ctrl-C
+    Ok(())
 }
