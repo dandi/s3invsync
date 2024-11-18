@@ -33,7 +33,6 @@ async fn main() -> anyhow::Result<()> {
         let itemlist = client.download_inventory_csv(fspec).await?;
         // TODO: Do this concurrently:
         for item in itemlist {
-            // TODO: Attach "Error reading from CSV ..." to error:
             let item = item?;
             let url =
                 S3Location::new(item.bucket, item.key.clone()).with_version_id(item.version_id);

@@ -2,7 +2,7 @@ mod location;
 mod streams;
 pub(crate) use self::location::S3Location;
 use self::streams::{ListManifestDates, ListObjectsError};
-use crate::inventory::InventoryItem;
+use crate::inventory::InventoryList;
 use crate::manifest::CsvManifest;
 use crate::manifest::FileSpec;
 use crate::timestamps::{Date, DateHM, DateMaybeHM};
@@ -12,15 +12,12 @@ use aws_sdk_s3::{
     Client,
 };
 use aws_smithy_runtime_api::client::{orchestrator::HttpResponse, result::SdkError};
-use flate2::bufread::GzDecoder;
 use futures_util::TryStreamExt;
 use md5::{Digest, Md5};
 use std::fs::File;
 use std::io::{BufReader, BufWriter, Seek, Write};
 use std::path::{Path, PathBuf};
 use thiserror::Error;
-
-type CsvIter = csv::DeserializeRecordsIntoIter<GzDecoder<BufReader<File>>, InventoryItem>;
 
 #[derive(Debug)]
 pub(crate) struct S3Client {
@@ -161,7 +158,7 @@ impl S3Client {
     pub(crate) async fn download_inventory_csv(
         &self,
         fspec: &FileSpec,
-    ) -> Result<CsvIter, CsvDownloadError> {
+    ) -> Result<InventoryList, CsvDownloadError> {
         let fname = fspec
             .key
             .rsplit_once('/')
@@ -172,10 +169,7 @@ impl S3Client {
         self.download_object(&url, Some(&fspec.md5_checksum), &outfile)
             .await?;
         // TODO: Verify file size?
-        Ok(csv::ReaderBuilder::new()
-            .has_headers(false)
-            .from_reader(GzDecoder::new(BufReader::new(outfile)))
-            .into_deserialize())
+        Ok(InventoryList::from_gzip_csv_file(url, outfile))
     }
 
     pub(crate) async fn download_object(
