@@ -11,6 +11,7 @@ use clap::Parser;
 use std::path::PathBuf;
 
 #[derive(Clone, Debug, Eq, Parser, PartialEq)]
+#[command(version)]
 struct Arguments {
     #[arg(short, long)]
     date: Option<DateMaybeHM>,
