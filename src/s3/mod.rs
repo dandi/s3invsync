@@ -22,7 +22,7 @@ pub(crate) struct S3Client {
 }
 
 impl S3Client {
-    async fn new(region: String, inv_bucket: String, inv_prefix: String) -> S3Client {
+    pub(crate) async fn new(region: String, inv_bucket: String, inv_prefix: String) -> S3Client {
         let config = aws_config::from_env()
             .app_name(
                 aws_config::AppName::new(env!("CARGO_PKG_NAME"))
@@ -265,6 +265,44 @@ pub(crate) struct GetError {
     bucket: String,
     key: String,
     source: SdkError<GetObjectError, HttpResponse>,
+}
+
+// cf. <https://github.com/awslabs/aws-sdk-rust/issues/1052>
+pub(crate) async fn get_bucket_region(bucket: &str) -> Result<String, GetBucketRegionError> {
+    let url = format!("https://{bucket}.s3.amazonaws.com");
+    let client = reqwest::ClientBuilder::new()
+        .user_agent(concat!(
+            env!("CARGO_PKG_NAME"),
+            "/",
+            env!("CARGO_PKG_VERSION"),
+            " (",
+            env!("CARGO_PKG_REPOSITORY"),
+            ")",
+        ))
+        .build()
+        .map_err(GetBucketRegionError::BuildClient)?;
+    let r = client
+        .head(&url)
+        .send()
+        .await
+        .map_err(|source| GetBucketRegionError::Http { url, source })?;
+    match r.headers().get("x-amz-bucket-region").map(|hv| hv.to_str()) {
+        Some(Ok(region)) => Ok(region.to_owned()),
+        Some(Err(e)) => Err(GetBucketRegionError::BadHeader(e)),
+        None => Err(GetBucketRegionError::NoHeader),
+    }
+}
+
+#[derive(Debug, Error)]
+pub(crate) enum GetBucketRegionError {
+    #[error("failed to initialize HTTP client")]
+    BuildClient(#[source] reqwest::Error),
+    #[error("failed to make HEAD request to {url:?}")]
+    Http { url: String, source: reqwest::Error },
+    #[error("S3 response lacked x-amz-bucket-region header")]
+    NoHeader,
+    #[error("S3 response had undecodable x-amz-bucket-region header")]
+    BadHeader(#[source] reqwest::header::ToStrError),
 }
 
 fn join_prefix(prefix: &str, suffix: &str) -> String {
