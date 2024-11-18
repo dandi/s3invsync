@@ -2,6 +2,7 @@ mod location;
 mod streams;
 pub(crate) use self::location::S3Location;
 use self::streams::{ListManifestDates, ListObjectsError};
+use crate::inventory::InventoryItem;
 use crate::manifest::CsvManifest;
 use crate::manifest::FileSpec;
 use crate::timestamps::{Date, DateHM, DateMaybeHM};
@@ -19,7 +20,7 @@ use std::io::{BufReader, BufWriter, Seek, Write};
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 
-type CsvReader = csv::Reader<GzDecoder<BufReader<File>>>;
+type CsvIter = csv::DeserializeRecordsIntoIter<GzDecoder<BufReader<File>>, InventoryItem>;
 
 #[derive(Debug)]
 pub(crate) struct S3Client {
@@ -106,16 +107,14 @@ impl S3Client {
     }
 
     async fn get_object(&self, url: &S3Location) -> Result<GetObjectOutput, GetError> {
-        self.inner
-            .get_object()
-            .bucket(url.bucket())
-            .key(url.key())
-            .send()
-            .await
-            .map_err(|source| GetError {
-                url: url.to_owned(),
-                source,
-            })
+        let mut op = self.inner.get_object().bucket(url.bucket()).key(url.key());
+        if let Some(v) = url.version_id() {
+            op = op.version_id(v);
+        }
+        op.send().await.map_err(|source| GetError {
+            url: url.to_owned(),
+            source,
+        })
     }
 
     pub(crate) async fn get_manifest(&self, when: DateHM) -> Result<CsvManifest, GetManifestError> {
@@ -162,7 +161,7 @@ impl S3Client {
     pub(crate) async fn download_inventory_csv(
         &self,
         fspec: &FileSpec,
-    ) -> Result<CsvReader, CsvDownloadError> {
+    ) -> Result<CsvIter, CsvDownloadError> {
         let fname = fspec
             .key
             .rsplit_once('/')
@@ -175,10 +174,11 @@ impl S3Client {
         // TODO: Verify file size?
         Ok(csv::ReaderBuilder::new()
             .has_headers(false)
-            .from_reader(GzDecoder::new(BufReader::new(outfile))))
+            .from_reader(GzDecoder::new(BufReader::new(outfile)))
+            .into_deserialize())
     }
 
-    async fn download_object(
+    pub(crate) async fn download_object(
         &self,
         url: &S3Location,
         // `md5_digest` must be a 32-character lowercase hexadecimal string

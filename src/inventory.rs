@@ -6,12 +6,12 @@ use time::OffsetDateTime;
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 #[serde(try_from = "RawInventoryItem")]
 pub(crate) struct InventoryItem {
-    bucket: String,
-    key: String,
-    version_id: String,
-    is_latest: bool,
-    last_modified_date: OffsetDateTime,
-    details: ItemDetails,
+    pub(crate) bucket: String,
+    pub(crate) key: String,
+    pub(crate) version_id: String,
+    pub(crate) is_latest: bool,
+    pub(crate) last_modified_date: OffsetDateTime,
+    pub(crate) details: ItemDetails,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

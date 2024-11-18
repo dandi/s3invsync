@@ -6,11 +6,16 @@ use thiserror::Error;
 pub(crate) struct S3Location {
     bucket: String,
     key: String,
+    version_id: Option<String>,
 }
 
 impl S3Location {
     pub(crate) fn new(bucket: String, key: String) -> S3Location {
-        S3Location { bucket, key }
+        S3Location {
+            bucket,
+            key,
+            version_id: None,
+        }
     }
 
     pub(crate) fn bucket(&self) -> &str {
@@ -21,8 +26,13 @@ impl S3Location {
         &self.key
     }
 
+    pub(crate) fn version_id(&self) -> Option<&str> {
+        self.version_id.as_deref()
+    }
+
     pub(crate) fn join(&self, suffix: &str) -> S3Location {
         let mut joined = self.clone();
+        joined.version_id = None;
         if !joined.key.ends_with('/') {
             joined.key.push('/');
         }
@@ -34,6 +44,15 @@ impl S3Location {
         S3Location {
             bucket: self.bucket.clone(),
             key: key.into(),
+            version_id: None,
+        }
+    }
+
+    pub(crate) fn with_version_id<S: Into<String>>(&self, version_id: S) -> S3Location {
+        S3Location {
+            bucket: self.bucket.clone(),
+            key: self.key.clone(),
+            version_id: Some(version_id.into()),
         }
     }
 }
@@ -41,7 +60,11 @@ impl S3Location {
 impl fmt::Display for S3Location {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         // TODO: Should the key be percent-encoded?
-        write!(f, "s3://{}/{}", self.bucket, self.key)
+        write!(f, "s3://{}/{}", self.bucket, self.key)?;
+        if let Some(ref v) = self.version_id {
+            write!(f, "?versionId={v}")?;
+        }
+        Ok(())
     }
 }
 
@@ -67,6 +90,7 @@ impl FromStr for S3Location {
         Ok(S3Location {
             bucket: bucket.to_owned(),
             key: key.to_owned(),
+            version_id: None,
         })
     }
 }
