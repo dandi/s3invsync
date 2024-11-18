@@ -113,3 +113,81 @@ where
 
     deserializer.deserialize_str(Visitor)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use time::macros::datetime;
+
+    fn parse_csv(s: &str) -> InventoryItem {
+        csv::ReaderBuilder::new()
+            .has_headers(false)
+            .from_reader(std::io::Cursor::new(s))
+            .deserialize()
+            .next()
+            .unwrap()
+            .unwrap()
+    }
+
+    #[test]
+    fn parse_item() {
+        let item = parse_csv(
+            r#""dandiarchive","zarr/73fb586f-b58a-49fc-876e-282ba962d310/0/0/0/14/4/100","nuYD8l5blCvLV3DbAiN1IXuwo7aF3F98","true","false","1511723","2022-12-12T13:20:39.000Z","627c47efe292876b91978324485cd2ec","false""#,
+        );
+        assert_eq!(item.bucket, "dandiarchive");
+        assert_eq!(
+            item.key,
+            "zarr/73fb586f-b58a-49fc-876e-282ba962d310/0/0/0/14/4/100"
+        );
+        assert_eq!(item.version_id, "nuYD8l5blCvLV3DbAiN1IXuwo7aF3F98");
+        assert!(item.is_latest);
+        assert_eq!(item.last_modified_date, datetime!(2022-12-12 13:20:39 UTC));
+        assert_eq!(
+            item.details,
+            ItemDetails::Present {
+                size: 1511723,
+                etag: "627c47efe292876b91978324485cd2ec".into(),
+                is_multipart_uploaded: false
+            }
+        );
+    }
+
+    #[test]
+    fn parse_deleted_item() {
+        let item = parse_csv(
+            r#""dandiarchive","zarr/73fb586f-b58a-49fc-876e-282ba962d310/0/0/0/14/4/100","t5w9XO56_Yi1eF6HE7KUgoLumufisMyo","false","true","","2022-12-11T17:55:08.000Z","","""#,
+        );
+        assert_eq!(item.bucket, "dandiarchive");
+        assert_eq!(
+            item.key,
+            "zarr/73fb586f-b58a-49fc-876e-282ba962d310/0/0/0/14/4/100"
+        );
+        assert_eq!(item.version_id, "t5w9XO56_Yi1eF6HE7KUgoLumufisMyo");
+        assert!(!item.is_latest);
+        assert_eq!(item.last_modified_date, datetime!(2022-12-11 17:55:08 UTC));
+        assert_eq!(item.details, ItemDetails::Deleted);
+    }
+
+    #[test]
+    fn parse_encoded() {
+        let item = parse_csv(
+            r#""dandiarchive","dandiarchive/dandiarchive/hive/dt%3D2024-05-07-01-00/symlink.txt","t4Z7oFATOK2678GfaU8oLcjWDMAS0RgK","true","false","38129","2024-05-07T21:12:55.000Z","f58c1f0e5fb20a9152788f825375884a","false""#,
+        );
+        assert_eq!(item.bucket, "dandiarchive");
+        assert_eq!(
+            item.key,
+            "dandiarchive/dandiarchive/hive/dt=2024-05-07-01-00/symlink.txt"
+        );
+        assert_eq!(item.version_id, "t4Z7oFATOK2678GfaU8oLcjWDMAS0RgK");
+        assert!(item.is_latest);
+        assert_eq!(item.last_modified_date, datetime!(2024-05-07 21:12:55 UTC));
+        assert_eq!(
+            item.details,
+            ItemDetails::Present {
+                size: 38129,
+                etag: "f58c1f0e5fb20a9152788f825375884a".into(),
+                is_multipart_uploaded: false,
+            }
+        );
+    }
+}
