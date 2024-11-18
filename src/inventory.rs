@@ -1,9 +1,77 @@
 use serde::{de, Deserialize};
 use std::fmt;
+use thiserror::Error;
 use time::OffsetDateTime;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(try_from = "RawInventoryItem")]
 pub(crate) struct InventoryItem {
+    bucket: String,
+    key: String,
+    version_id: String,
+    is_latest: bool,
+    last_modified_date: OffsetDateTime,
+    details: ItemDetails,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum ItemDetails {
+    Present {
+        size: i64,
+        etag: String,
+        is_multipart_uploaded: bool,
+    },
+    Deleted,
+}
+
+impl TryFrom<RawInventoryItem> for InventoryItem {
+    type Error = InventoryItemError;
+
+    fn try_from(value: RawInventoryItem) -> Result<InventoryItem, InventoryItemError> {
+        if value.is_delete_marker {
+            Ok(InventoryItem {
+                bucket: value.bucket,
+                key: value.key,
+                version_id: value.version_id,
+                is_latest: value.is_latest,
+                last_modified_date: value.last_modified_date,
+                details: ItemDetails::Deleted,
+            })
+        } else {
+            let Some(size) = value.size else {
+                return Err(InventoryItemError::NoSize(value.key));
+            };
+            let Some(etag) = value.etag else {
+                return Err(InventoryItemError::NoEtag(value.key));
+            };
+            // Is there any point in caring if this one is absent?
+            let is_multipart_uploaded = value.is_multipart_uploaded.unwrap_or_default();
+            Ok(InventoryItem {
+                bucket: value.bucket,
+                key: value.key,
+                version_id: value.version_id,
+                is_latest: value.is_latest,
+                last_modified_date: value.last_modified_date,
+                details: ItemDetails::Present {
+                    size,
+                    etag,
+                    is_multipart_uploaded,
+                },
+            })
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, Error, PartialEq)]
+pub(crate) enum InventoryItemError {
+    #[error("non-deleted inventory item {0:?} lacks size")]
+    NoSize(String),
+    #[error("non-deleted inventory item {0:?} lacks etag")]
+    NoEtag(String),
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+struct RawInventoryItem {
     // IMPORTANT: The order of the fields must match that in
     // `EXPECTED_FILE_SCHEMA` in `manifest.rs`
     bucket: String,
