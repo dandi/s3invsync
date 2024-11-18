@@ -1,4 +1,6 @@
+mod location;
 mod streams;
+pub(crate) use self::location::S3Location;
 use self::streams::{ListManifestDates, ListObjectsError};
 use crate::manifest::CsvManifest;
 use crate::manifest::FileSpec;
@@ -22,16 +24,14 @@ type CsvReader = csv::Reader<GzDecoder<BufReader<File>>>;
 #[derive(Debug)]
 pub(crate) struct S3Client {
     inner: Client,
-    inv_bucket: String,
-    inv_prefix: String,
+    inventory_base: S3Location,
     tmpdir: tempfile::TempDir,
 }
 
 impl S3Client {
     pub(crate) async fn new(
         region: String,
-        inv_bucket: String,
-        inv_prefix: String,
+        inventory_base: S3Location,
     ) -> Result<S3Client, ClientBuildError> {
         let tmpdir = tempfile::tempdir().map_err(ClientBuildError::Tempdir)?;
         let config = aws_config::from_env()
@@ -46,23 +46,16 @@ impl S3Client {
         let inner = Client::new(&config);
         Ok(S3Client {
             inner,
-            inv_bucket,
-            inv_prefix,
+            inventory_base,
             tmpdir,
         })
     }
 
-    fn make_dl_tempfile(
-        &self,
-        subpath: &Path,
-        bucket: &str,
-        key: &str,
-    ) -> Result<File, TempfileError> {
+    fn make_dl_tempfile(&self, subpath: &Path, objloc: &S3Location) -> Result<File, TempfileError> {
         let path = self.tmpdir.path().join(subpath);
         if let Some(p) = path.parent() {
             std::fs::create_dir_all(p).map_err(|source| TempfileError::Mkdir {
-                bucket: bucket.to_owned(),
-                key: key.to_owned(),
+                url: objloc.to_owned(),
                 source,
             })?;
         }
@@ -73,8 +66,7 @@ impl S3Client {
             .create(true)
             .open(path)
             .map_err(|source| TempfileError::Open {
-                bucket: bucket.to_owned(),
-                key: key.to_owned(),
+                url: objloc.to_owned(),
                 source,
             })
     }
@@ -97,11 +89,11 @@ impl S3Client {
     ) -> Result<DateHM, FindManifestError> {
         // Iterate over `DateHM` prefixes in `s3://{inv_bucket}/{inv_prefix}/`
         // or `s3://{inv_bucket}/{inv_prefix}/{day}T` and return greatest one
-        let key_prefix = match day {
-            Some(d) => join_prefix(&self.inv_prefix, &format!("{d}T")),
-            None => join_prefix(&self.inv_prefix, ""),
+        let url = match day {
+            Some(d) => self.inventory_base.join(&format!("{d}T")),
+            None => self.inventory_base.join(""),
         };
-        let mut stream = ListManifestDates::new(self, key_prefix.clone());
+        let mut stream = ListManifestDates::new(self, url.clone());
         let mut maxdate = None;
         while let Some(d) = stream.try_next().await? {
             match maxdate {
@@ -110,65 +102,58 @@ impl S3Client {
                 Some(_) => (),
             }
         }
-        maxdate.ok_or_else(|| FindManifestError::NoMatch {
-            bucket: self.inv_bucket.clone(),
-            prefix: key_prefix,
-        })
+        maxdate.ok_or_else(|| FindManifestError::NoMatch { url })
     }
 
-    async fn get_object(&self, bucket: &str, key: &str) -> Result<GetObjectOutput, GetError> {
+    async fn get_object(&self, url: &S3Location) -> Result<GetObjectOutput, GetError> {
         self.inner
             .get_object()
-            .bucket(bucket)
-            .key(key)
+            .bucket(url.bucket())
+            .key(url.key())
             .send()
             .await
             .map_err(|source| GetError {
-                bucket: bucket.to_owned(),
-                key: key.to_owned(),
+                url: url.to_owned(),
                 source,
             })
     }
 
     pub(crate) async fn get_manifest(&self, when: DateHM) -> Result<CsvManifest, GetManifestError> {
-        let checksum_key = join_prefix(&self.inv_prefix, &format!("{when}/manifest.checksum"));
-        let checksum_obj = self.get_object(&self.inv_bucket, &checksum_key).await?;
+        let checksum_url = self
+            .inventory_base
+            .join(&format!("{when}/manifest.checksum"));
+        let checksum_obj = self.get_object(&checksum_url).await?;
         let checksum_bytes = checksum_obj
             .body
             .collect()
             .await
             .map_err(|source| GetManifestError::DownloadChecksum {
-                bucket: self.inv_bucket.clone(),
-                key: checksum_key.clone(),
+                url: checksum_url.clone(),
                 source,
             })?
             .to_vec();
         let checksum = std::str::from_utf8(&checksum_bytes)
             .map_err(|source| GetManifestError::DecodeChecksum {
-                bucket: self.inv_bucket.clone(),
-                key: checksum_key,
+                url: checksum_url.clone(),
                 source,
             })?
             .trim();
-        let manifest_key = join_prefix(&self.inv_prefix, &format!("{when}/manifest.json"));
+        let manifest_url = self.inventory_base.join(&format!("{when}/manifest.json"));
         let mut manifest_file = self.make_dl_tempfile(
             &PathBuf::from(format!("manifests/{when}.json")),
-            &self.inv_bucket,
-            &manifest_key,
+            &manifest_url,
         )?;
-        self.download_object(&self.inv_bucket, &manifest_key, checksum, &manifest_file)
+        self.download_object(&manifest_url, checksum, &manifest_file)
             .await?;
         manifest_file
             .rewind()
             .map_err(|source| GetManifestError::Rewind {
-                bucket: self.inv_bucket.clone(),
-                key: manifest_key.clone(),
+                url: manifest_url.clone(),
                 source,
             })?;
         let manifest = serde_json::from_reader::<_, CsvManifest>(BufReader::new(manifest_file))
             .map_err(|source| GetManifestError::Parse {
-                bucket: self.inv_bucket.clone(),
-                key: manifest_key,
+                url: manifest_url,
                 source,
             })?;
         Ok(manifest)
@@ -182,12 +167,10 @@ impl S3Client {
             .key
             .rsplit_once('/')
             .map_or(&*fspec.key, |(_, after)| after);
-        let outfile = self.make_dl_tempfile(
-            &PathBuf::from(format!("data/{fname}.csv.gz")),
-            &self.inv_bucket,
-            &fspec.key,
-        )?;
-        self.download_object(&self.inv_bucket, &fspec.key, &fspec.md5_checksum, &outfile)
+        let url = self.inventory_base.with_key(&fspec.key);
+        let outfile =
+            self.make_dl_tempfile(&PathBuf::from(format!("data/{fname}.csv.gz")), &url)?;
+        self.download_object(&url, &fspec.md5_checksum, &outfile)
             .await?;
         // TODO: Verify file size?
         Ok(csv::ReaderBuilder::new()
@@ -197,13 +180,12 @@ impl S3Client {
 
     async fn download_object(
         &self,
-        bucket: &str,
-        key: &str,
+        url: &S3Location,
         // `md5_digest` must be a 32-character lowercase hexadecimal string
         md5_digest: &str,
         outfile: &File,
     ) -> Result<(), DownloadError> {
-        let obj = self.get_object(bucket, key).await?;
+        let obj = self.get_object(url).await?;
         let mut bytestream = obj.body;
         let mut outfile = BufWriter::new(outfile);
         let mut hasher = Md5::new();
@@ -212,30 +194,26 @@ impl S3Client {
                 .try_next()
                 .await
                 .map_err(|source| DownloadError::Download {
-                    bucket: bucket.to_owned(),
-                    key: key.to_owned(),
+                    url: url.to_owned(),
                     source,
                 })?
         {
             outfile
                 .write(&blob)
                 .map_err(|source| DownloadError::Write {
-                    bucket: bucket.to_owned(),
-                    key: key.to_owned(),
+                    url: url.to_owned(),
                     source,
                 })?;
             hasher.update(&blob);
         }
         outfile.flush().map_err(|source| DownloadError::Write {
-            bucket: bucket.to_owned(),
-            key: key.to_owned(),
+            url: url.to_owned(),
             source,
         })?;
         let actual_md5 = hex::encode(hasher.finalize());
         if actual_md5 != md5_digest {
             Err(DownloadError::Verify {
-                bucket: bucket.to_owned(),
-                key: key.to_owned(),
+                url: url.to_owned(),
                 expected_md5: md5_digest.to_owned(),
                 actual_md5,
             })
@@ -253,16 +231,14 @@ pub(crate) enum ClientBuildError {
 
 #[derive(Debug, Error)]
 pub(crate) enum TempfileError {
-    #[error("failed to create parent directories for tempfile for downloading bucket {bucket:?}, key {key:?}")]
+    #[error("failed to create parent directories for tempfile for downloading {url}")]
     Mkdir {
-        bucket: String,
-        key: String,
+        url: S3Location,
         source: std::io::Error,
     },
-    #[error("failed to open tempfile for downloading bucket {bucket:?}, key {key:?}")]
+    #[error("failed to open tempfile for downloading {url}")]
     Open {
-        bucket: String,
-        key: String,
+        url: S3Location,
         source: std::io::Error,
     },
 }
@@ -271,8 +247,8 @@ pub(crate) enum TempfileError {
 pub(crate) enum FindManifestError {
     #[error(transparent)]
     List(#[from] ListObjectsError),
-    #[error("no manifests found in bucket {bucket:?} with prefix {prefix:?}")]
-    NoMatch { bucket: String, prefix: String },
+    #[error("no manifests found in {url}")]
+    NoMatch { url: S3Location },
 }
 
 #[derive(Debug, Error)]
@@ -283,30 +259,26 @@ pub(crate) enum GetManifestError {
     Get(#[from] GetError),
     #[error(transparent)]
     Download(#[from] DownloadError),
-    #[error("failed downloading checksum at bucket {bucket:?}, key {key:?}")]
+    #[error("failed downloading checksum at {url}")]
     DownloadChecksum {
-        bucket: String,
-        key: String,
+        url: S3Location,
         source: ByteStreamError,
     },
-    #[error("manifest checksum contents at bucket {bucket:?}, key {key:?} are not UTF-8")]
+    #[error("manifest checksum contents at {url} are not UTF-8")]
     DecodeChecksum {
-        bucket: String,
-        key: String,
+        url: S3Location,
         source: std::str::Utf8Error,
     },
     #[error(transparent)]
     Tempfile(#[from] TempfileError),
-    #[error("failed to rewind tempfile after downloading bucket {bucket:?}, key {key:?}")]
+    #[error("failed to rewind tempfile after downloading {url}")]
     Rewind {
-        bucket: String,
-        key: String,
+        url: S3Location,
         source: std::io::Error,
     },
-    #[error("failed to deserialize manifest at bucket {bucket:?}, key {key:?}")]
+    #[error("failed to deserialize manifest at {url}")]
     Parse {
-        bucket: String,
-        key: String,
+        url: S3Location,
         source: serde_json::Error,
     },
 }
@@ -315,22 +287,19 @@ pub(crate) enum GetManifestError {
 pub(crate) enum DownloadError {
     #[error(transparent)]
     Get(#[from] GetError),
-    #[error("failed downloading contents for bucket {bucket:?}, key {key:?}")]
+    #[error("failed downloading contents for {url}")]
     Download {
-        bucket: String,
-        key: String,
+        url: S3Location,
         source: ByteStreamError,
     },
-    #[error("failed writing contents of bucket {bucket:?}, key {key:?} to disk")]
+    #[error("failed writing contents of {url} to disk")]
     Write {
-        bucket: String,
-        key: String,
+        url: S3Location,
         source: std::io::Error,
     },
-    #[error("checksum verification for object at bucket {bucket:?}, key {key:?} failed; expected MD5 {expected_md5:?}, got {actual_md5:?}")]
+    #[error("checksum verification for object at {url} failed; expected MD5 {expected_md5:?}, got {actual_md5:?}")]
     Verify {
-        bucket: String,
-        key: String,
+        url: S3Location,
         expected_md5: String,
         actual_md5: String,
     },
@@ -345,10 +314,9 @@ pub(crate) enum CsvDownloadError {
 }
 
 #[derive(Debug, Error)]
-#[error("failed to get object in bucket {bucket:?} at key {key:?}")]
+#[error("failed to get object at {url}")]
 pub(crate) struct GetError {
-    bucket: String,
-    key: String,
+    url: S3Location,
     source: SdkError<GetObjectError, HttpResponse>,
 }
 
@@ -388,13 +356,4 @@ pub(crate) enum GetBucketRegionError {
     NoHeader,
     #[error("S3 response had undecodable x-amz-bucket-region header")]
     BadHeader(#[source] reqwest::header::ToStrError),
-}
-
-fn join_prefix(prefix: &str, suffix: &str) -> String {
-    let mut s = prefix.to_owned();
-    if !s.ends_with('/') {
-        s.push('/');
-    }
-    s.push_str(suffix);
-    s
 }

@@ -1,3 +1,4 @@
+use super::location::S3Location;
 use super::S3Client;
 use crate::timestamps::DateHM;
 use aws_sdk_s3::{
@@ -17,23 +18,21 @@ type InnerListError = SdkError<ListObjectsV2Error, HttpResponse>;
 #[derive(Debug)]
 #[must_use = "streams do nothing unless polled"]
 pub(super) struct ListManifestDates {
-    bucket: String,
-    key_prefix: String,
+    url: S3Location,
     inner: Option<PaginationStream<Result<ListObjectsV2Output, InnerListError>>>,
     results: VecDeque<DateHM>,
 }
 
 impl ListManifestDates {
-    pub(super) fn new(client: &S3Client, key_prefix: String) -> Self {
+    pub(super) fn new(client: &S3Client, url: S3Location) -> Self {
         ListManifestDates {
-            bucket: client.inv_bucket.clone(),
-            key_prefix: key_prefix.clone(),
+            url: url.clone(),
             inner: Some(
                 client
                     .inner
                     .list_objects_v2()
-                    .bucket(&client.inv_bucket)
-                    .prefix(key_prefix)
+                    .bucket(url.bucket())
+                    .prefix(url.key())
                     .delimiter("/")
                     .into_paginator()
                     .send(),
@@ -63,8 +62,7 @@ impl Stream for ListManifestDates {
                 Err(source) => {
                     self.inner = None;
                     return Some(Err(ListObjectsError {
-                        bucket: self.bucket.clone(),
-                        prefix: self.key_prefix.clone(),
+                        url: self.url.clone(),
                         source,
                     }))
                     .into();
@@ -81,9 +79,8 @@ impl Stream for ListManifestDates {
 }
 
 #[derive(Debug, Error)]
-#[error("failed to list S3 objects in bucket {bucket:?} with prefix {prefix:?}")]
+#[error("failed to list S3 objects in {url}")]
 pub(crate) struct ListObjectsError {
-    bucket: String,
-    prefix: String,
+    url: S3Location,
     source: InnerListError,
 }
