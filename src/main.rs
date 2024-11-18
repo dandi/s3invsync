@@ -24,7 +24,7 @@ struct Arguments {
 async fn main() -> anyhow::Result<()> {
     let args = Arguments::parse();
     let region = get_bucket_region(&args.inv_bucket).await?;
-    let client = S3Client::new(region, args.inv_bucket, args.inv_prefix).await;
+    let client = S3Client::new(region, args.inv_bucket, args.inv_prefix).await?;
     let manifest = client.get_manifest_for_date(args.date).await?;
     for fspec in &manifest.files {
         // TODO: Add to pool of concurrent download tasks?

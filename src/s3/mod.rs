@@ -14,19 +14,26 @@ use futures_util::TryStreamExt;
 use md5::{Digest, Md5};
 use std::fs::File;
 use std::io::{BufReader, BufWriter, Seek, Write};
+use std::path::{Path, PathBuf};
 use thiserror::Error;
 
 type CsvReader = csv::Reader<GzDecoder<BufReader<File>>>;
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub(crate) struct S3Client {
     inner: Client,
     inv_bucket: String,
     inv_prefix: String,
+    tmpdir: tempfile::TempDir,
 }
 
 impl S3Client {
-    pub(crate) async fn new(region: String, inv_bucket: String, inv_prefix: String) -> S3Client {
+    pub(crate) async fn new(
+        region: String,
+        inv_bucket: String,
+        inv_prefix: String,
+    ) -> Result<S3Client, ClientBuildError> {
+        let tmpdir = tempfile::tempdir().map_err(ClientBuildError::Tempdir)?;
         let config = aws_config::from_env()
             .app_name(
                 aws_config::AppName::new(env!("CARGO_PKG_NAME"))
@@ -37,11 +44,39 @@ impl S3Client {
             .load()
             .await;
         let inner = Client::new(&config);
-        S3Client {
+        Ok(S3Client {
             inner,
             inv_bucket,
             inv_prefix,
+            tmpdir,
+        })
+    }
+
+    fn make_dl_tempfile(
+        &self,
+        subpath: &Path,
+        bucket: &str,
+        key: &str,
+    ) -> Result<File, TempfileError> {
+        let path = self.tmpdir.path().join(subpath);
+        if let Some(p) = path.parent() {
+            std::fs::create_dir_all(p).map_err(|source| TempfileError::Mkdir {
+                bucket: bucket.to_owned(),
+                key: key.to_owned(),
+                source,
+            })?;
         }
+        File::options()
+            .read(true)
+            .write(true)
+            .truncate(true)
+            .create(true)
+            .open(path)
+            .map_err(|source| TempfileError::Open {
+                bucket: bucket.to_owned(),
+                key: key.to_owned(),
+                source,
+            })
     }
 
     pub(crate) async fn get_manifest_for_date(
@@ -116,12 +151,11 @@ impl S3Client {
             })?
             .trim();
         let manifest_key = join_prefix(&self.inv_prefix, &format!("{when}/manifest.json"));
-        let mut manifest_file =
-            tempfile::tempfile().map_err(|source| GetManifestError::Tempfile {
-                bucket: self.inv_bucket.clone(),
-                key: manifest_key.clone(),
-                source,
-            })?;
+        let mut manifest_file = self.make_dl_tempfile(
+            &PathBuf::from(format!("manifests/{when}.json")),
+            &self.inv_bucket,
+            &manifest_key,
+        )?;
         self.download_object(&self.inv_bucket, &manifest_key, checksum, &manifest_file)
             .await?;
         manifest_file
@@ -144,11 +178,15 @@ impl S3Client {
         &self,
         fspec: &FileSpec,
     ) -> Result<CsvReader, CsvDownloadError> {
-        let outfile = tempfile::tempfile().map_err(|source| CsvDownloadError::Tempfile {
-            bucket: self.inv_bucket.clone(),
-            key: fspec.key.clone(),
-            source,
-        })?;
+        let fname = fspec
+            .key
+            .rsplit_once('/')
+            .map_or(&*fspec.key, |(_, after)| after);
+        let outfile = self.make_dl_tempfile(
+            &PathBuf::from(format!("data/{fname}.csv.gz")),
+            &self.inv_bucket,
+            &fspec.key,
+        )?;
         self.download_object(&self.inv_bucket, &fspec.key, &fspec.md5_checksum, &outfile)
             .await?;
         // TODO: Verify file size?
@@ -208,6 +246,28 @@ impl S3Client {
 }
 
 #[derive(Debug, Error)]
+pub(crate) enum ClientBuildError {
+    #[error("failed to create temporary downloads directory")]
+    Tempdir(#[from] std::io::Error),
+}
+
+#[derive(Debug, Error)]
+pub(crate) enum TempfileError {
+    #[error("failed to create parent directories for tempfile for downloading bucket {bucket:?}, key {key:?}")]
+    Mkdir {
+        bucket: String,
+        key: String,
+        source: std::io::Error,
+    },
+    #[error("failed to open tempfile for downloading bucket {bucket:?}, key {key:?}")]
+    Open {
+        bucket: String,
+        key: String,
+        source: std::io::Error,
+    },
+}
+
+#[derive(Debug, Error)]
 pub(crate) enum FindManifestError {
     #[error(transparent)]
     List(#[from] ListObjectsError),
@@ -235,12 +295,8 @@ pub(crate) enum GetManifestError {
         key: String,
         source: std::str::Utf8Error,
     },
-    #[error("failed to create tempfile for downloading bucket {bucket:?}, key {key:?}")]
-    Tempfile {
-        bucket: String,
-        key: String,
-        source: std::io::Error,
-    },
+    #[error(transparent)]
+    Tempfile(#[from] TempfileError),
     #[error("failed to rewind tempfile after downloading bucket {bucket:?}, key {key:?}")]
     Rewind {
         bucket: String,
@@ -282,12 +338,8 @@ pub(crate) enum DownloadError {
 
 #[derive(Debug, Error)]
 pub(crate) enum CsvDownloadError {
-    #[error("failed to create tempfile for downloading bucket {bucket:?}, key {key:?}")]
-    Tempfile {
-        bucket: String,
-        key: String,
-        source: std::io::Error,
-    },
+    #[error(transparent)]
+    Tempfile(#[from] TempfileError),
     #[error(transparent)]
     Download(#[from] DownloadError),
 }
