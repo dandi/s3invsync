@@ -24,6 +24,22 @@ pub(crate) enum ItemDetails {
     Deleted,
 }
 
+impl ItemDetails {
+    pub(crate) fn md5_digest(&self) -> Option<&str> {
+        // <https://docs.aws.amazon.com/AmazonS3/latest/API/API_Object.html>
+        // Note that encryption type will also need to be taken into account
+        // if & when that's supported.
+        match self {
+            ItemDetails::Present {
+                etag,
+                is_multipart_uploaded: false,
+                ..
+            } => Some(etag),
+            _ => None,
+        }
+    }
+}
+
 impl TryFrom<RawInventoryItem> for InventoryItem {
     type Error = InventoryItemError;
 
@@ -39,13 +55,14 @@ impl TryFrom<RawInventoryItem> for InventoryItem {
             })
         } else {
             let Some(size) = value.size else {
-                return Err(InventoryItemError::NoSize(value.key));
+                return Err(InventoryItemError::Size(value.key));
             };
             let Some(etag) = value.etag else {
-                return Err(InventoryItemError::NoEtag(value.key));
+                return Err(InventoryItemError::Etag(value.key));
             };
-            // Is there any point in caring if this one is absent?
-            let is_multipart_uploaded = value.is_multipart_uploaded.unwrap_or_default();
+            let Some(is_multipart_uploaded) = value.is_multipart_uploaded else {
+                return Err(InventoryItemError::Multipart(value.key));
+            };
             Ok(InventoryItem {
                 bucket: value.bucket,
                 key: value.key,
@@ -65,9 +82,11 @@ impl TryFrom<RawInventoryItem> for InventoryItem {
 #[derive(Clone, Debug, Eq, Error, PartialEq)]
 pub(crate) enum InventoryItemError {
     #[error("non-deleted inventory item {0:?} lacks size")]
-    NoSize(String),
+    Size(String),
     #[error("non-deleted inventory item {0:?} lacks etag")]
-    NoEtag(String),
+    Etag(String),
+    #[error("non-deleted inventory item {0:?} lacks is-multipart-uploaded field")]
+    Multipart(String),
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
