@@ -143,7 +143,7 @@ impl S3Client {
             &PathBuf::from(format!("manifests/{when}.json")),
             &manifest_url,
         )?;
-        self.download_object(&manifest_url, checksum, &manifest_file)
+        self.download_object(&manifest_url, Some(checksum), &manifest_file)
             .await?;
         manifest_file
             .rewind()
@@ -170,7 +170,7 @@ impl S3Client {
         let url = self.inventory_base.with_key(&fspec.key);
         let outfile =
             self.make_dl_tempfile(&PathBuf::from(format!("data/{fname}.csv.gz")), &url)?;
-        self.download_object(&url, &fspec.md5_checksum, &outfile)
+        self.download_object(&url, Some(&fspec.md5_checksum), &outfile)
             .await?;
         // TODO: Verify file size?
         Ok(csv::ReaderBuilder::new()
@@ -182,7 +182,7 @@ impl S3Client {
         &self,
         url: &S3Location,
         // `md5_digest` must be a 32-character lowercase hexadecimal string
-        md5_digest: &str,
+        md5_digest: Option<&str>,
         outfile: &File,
     ) -> Result<(), DownloadError> {
         let obj = self.get_object(url).await?;
@@ -211,15 +211,16 @@ impl S3Client {
             source,
         })?;
         let actual_md5 = hex::encode(hasher.finalize());
-        if actual_md5 != md5_digest {
-            Err(DownloadError::Verify {
-                url: url.to_owned(),
-                expected_md5: md5_digest.to_owned(),
-                actual_md5,
-            })
-        } else {
-            Ok(())
+        if let Some(expected_md5) = md5_digest {
+            if actual_md5 != expected_md5 {
+                return Err(DownloadError::Verify {
+                    url: url.to_owned(),
+                    expected_md5: expected_md5.to_owned(),
+                    actual_md5,
+                });
+            }
         }
+        Ok(())
     }
 }
 
