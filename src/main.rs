@@ -1,5 +1,6 @@
 #![allow(dead_code)] // XXX
 #![allow(unused_imports)] // XXX
+mod inventory;
 mod manifest;
 mod s3;
 mod timestamps;
