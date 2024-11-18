@@ -6,7 +6,8 @@ static EXPECTED_FILE_SCHEMA: &str = "Bucket, Key, VersionId, IsLatest, IsDeleteM
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 #[serde(try_from = "Manifest")]
 pub(crate) struct CsvManifest {
-    files: Vec<FileSpec>,
+    pub(crate) source_bucket: String,
+    pub(crate) files: Vec<FileSpec>,
 }
 
 impl TryFrom<Manifest> for CsvManifest {
@@ -18,7 +19,10 @@ impl TryFrom<Manifest> for CsvManifest {
         } else if value.file_schema != EXPECTED_FILE_SCHEMA {
             Err(ManifestError::Schema(value.file_schema))
         } else {
-            Ok(CsvManifest { files: value.files })
+            Ok(CsvManifest {
+                source_bucket: value.source_bucket,
+                files: value.files,
+            })
         }
     }
 }
@@ -34,7 +38,7 @@ pub(crate) enum ManifestError {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Manifest {
-    //source_bucket: String,
+    source_bucket: String,
     //destination_bucket: String,
     //version: String,
     //creation_timestamp: String,
@@ -55,8 +59,8 @@ pub(crate) enum FileFormat {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 pub(crate) struct FileSpec {
-    key: String,
-    size: i64,
+    pub(crate) key: String,
+    pub(crate) size: i64,
     #[serde(rename = "MD5checksum")]
-    md5_checksum: String,
+    pub(crate) md5_checksum: String,
 }

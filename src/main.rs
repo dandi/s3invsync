@@ -25,19 +25,17 @@ async fn main() -> anyhow::Result<()> {
     let args = Arguments::parse();
     let region = get_bucket_region(&args.inv_bucket).await?;
     let client = S3Client::new(region, args.inv_bucket, args.inv_prefix).await;
-    let _manifest = client.get_manifest_for_date(args.date).await?;
-
-    /*
-    - Get CSVs from manifests
-        - Download completely
-        - Verify checksum
-        - Decompress
-    - Get each key in each CSV
-        - Handle concurrent downloads of the same key
-        - Verify etag
-    - Manage object metadata and old versions
-    - Handle errors and Ctrl-C
-    */
-
+    let manifest = client.get_manifest_for_date(args.date).await?;
+    for fspec in &manifest.files {
+        // TODO: Add to pool of concurrent download tasks?
+        client.download_inventory_csv(fspec).await?;
+        // TODO: For each entry in CSV:
+        // - Download object
+        //  - Verify etag
+        //  - Manage object metadata and old versions
+        // - Handle concurrent downloads of the same key
+        todo!()
+    }
+    // Handle errors and Ctrl-C
     todo!()
 }

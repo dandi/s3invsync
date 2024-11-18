@@ -1,6 +1,7 @@
 mod streams;
 use self::streams::{ListManifestDates, ListObjectsError};
 use crate::manifest::CsvManifest;
+use crate::manifest::FileSpec;
 use crate::timestamps::{Date, DateHM, DateMaybeHM};
 use aws_sdk_s3::{
     operation::get_object::{GetObjectError, GetObjectOutput},
@@ -8,11 +9,14 @@ use aws_sdk_s3::{
     Client,
 };
 use aws_smithy_runtime_api::client::{orchestrator::HttpResponse, result::SdkError};
+use flate2::bufread::GzDecoder;
 use futures_util::TryStreamExt;
 use md5::{Digest, Md5};
 use std::fs::File;
 use std::io::{BufReader, BufWriter, Seek, Write};
 use thiserror::Error;
+
+type CsvReader = csv::Reader<GzDecoder<BufReader<File>>>;
 
 #[derive(Clone, Debug)]
 pub(crate) struct S3Client {
@@ -136,6 +140,23 @@ impl S3Client {
         Ok(manifest)
     }
 
+    pub(crate) async fn download_inventory_csv(
+        &self,
+        fspec: &FileSpec,
+    ) -> Result<CsvReader, CsvDownloadError> {
+        let outfile = tempfile::tempfile().map_err(|source| CsvDownloadError::Tempfile {
+            bucket: self.inv_bucket.clone(),
+            key: fspec.key.clone(),
+            source,
+        })?;
+        self.download_object(&self.inv_bucket, &fspec.key, &fspec.md5_checksum, &outfile)
+            .await?;
+        // TODO: Verify file size?
+        Ok(csv::ReaderBuilder::new()
+            .has_headers(false)
+            .from_reader(GzDecoder::new(BufReader::new(outfile))))
+    }
+
     async fn download_object(
         &self,
         bucket: &str,
@@ -257,6 +278,18 @@ pub(crate) enum DownloadError {
         expected_md5: String,
         actual_md5: String,
     },
+}
+
+#[derive(Debug, Error)]
+pub(crate) enum CsvDownloadError {
+    #[error("failed to create tempfile for downloading bucket {bucket:?}, key {key:?}")]
+    Tempfile {
+        bucket: String,
+        key: String,
+        source: std::io::Error,
+    },
+    #[error(transparent)]
+    Download(#[from] DownloadError),
 }
 
 #[derive(Debug, Error)]
