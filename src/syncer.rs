@@ -46,45 +46,64 @@ impl Syncer {
         for fspec in manifest.files {
             let clnt = self.client.clone();
             let sender = obj_sender.clone();
-            inventory_dl_pool.spawn(move |_| async move {
-                let itemlist = clnt.download_inventory_csv(fspec).await?;
-                for item in itemlist {
-                    let _ = sender.send(item?).await;
-                }
-                Ok(())
+            inventory_dl_pool.spawn(move |token| async move {
+                token
+                    .run_until_cancelled(async move {
+                        let itemlist = clnt.download_inventory_csv(fspec).await?;
+                        for item in itemlist {
+                            if sender.send(item?).await.is_err() {
+                                // Assume we're shutting down
+                                return Ok(());
+                            }
+                        }
+                        Ok(())
+                    })
+                    .await
+                    .unwrap_or(Ok(()))
             });
         }
+        inventory_dl_pool.close();
+        drop(obj_sender);
 
         let mut errors = Vec::new();
-        let mut inventory_pool_closed = false;
-        let mut object_pool_closed = false;
+        let mut inventory_pool_finished = false;
+        let mut object_pool_finished = false;
         let mut all_objects_txed = false;
         loop {
             tokio::select! {
-                r = inventory_dl_pool.next(), if !inventory_pool_closed => {
+                r = inventory_dl_pool.next(), if !inventory_pool_finished => {
                     match r {
                         Some(Ok(())) => (),
                         Some(Err(e)) => {
-                            if !errors.is_empty() {
+                            tracing::error!(error = ?e, "error processing inventory lists");
+                            if errors.is_empty() {
                                 inventory_dl_pool.shutdown();
                                 object_dl_pool.shutdown();
                             }
                             errors.push(e);
                         }
-                        None => inventory_pool_closed = true,
+                        None => {
+                            tracing::debug!("Finished processing inventory lists");
+                            inventory_pool_finished = true;
+                            object_dl_pool.close();
+                        }
                     }
                 }
-                r = object_dl_pool.next(), if !object_pool_closed => {
+                r = object_dl_pool.next(), if !object_pool_finished => {
                     match r {
                         Some(Ok(())) => (),
                         Some(Err(e)) => {
-                            if !errors.is_empty() {
+                            tracing::error!(error = ?e, "error processing objects");
+                            if errors.is_empty() {
                                 inventory_dl_pool.shutdown();
                                 object_dl_pool.shutdown();
                             }
                             errors.push(e);
                         }
-                        None => object_pool_closed = true,
+                        None => {
+                            tracing::debug!("Finished processing objects");
+                            object_pool_finished = true;
+                        }
                     }
                 }
                 r = obj_receiver.recv(), if !all_objects_txed => {
