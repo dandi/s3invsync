@@ -18,6 +18,7 @@ pub(crate) struct Syncer {
     outdir: PathBuf,
     inventory_jobs: NonZeroUsize,
     object_jobs: NonZeroUsize,
+    path_filter: Option<regex::Regex>,
 }
 
 impl Syncer {
@@ -26,12 +27,14 @@ impl Syncer {
         outdir: PathBuf,
         inventory_jobs: NonZeroUsize,
         object_jobs: NonZeroUsize,
+        path_filter: Option<regex::Regex>,
     ) -> Arc<Syncer> {
         Arc::new(Syncer {
             client: Arc::new(client),
             outdir,
             inventory_jobs,
             object_jobs,
+            path_filter,
         })
     }
 
@@ -115,6 +118,11 @@ impl Syncer {
         if item.is_deleted() || !item.is_latest {
             // TODO
             return Ok(());
+        }
+        if let Some(ref rgx) = self.path_filter {
+            if !rgx.is_match(&item.key) {
+                return Ok(());
+            }
         }
         let url = item.url();
         let outpath = self.outdir.join(&item.key);
