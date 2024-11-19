@@ -157,7 +157,7 @@ impl S3Client {
 
     pub(crate) async fn download_inventory_csv(
         &self,
-        fspec: &FileSpec,
+        fspec: FileSpec,
     ) -> Result<InventoryList, CsvDownloadError> {
         let fname = fspec
             .key
