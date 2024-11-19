@@ -2,7 +2,7 @@
 name = "s3invsync"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.82"
+rust-version = "1.80"
 description = "AWS S3 Inventory-based backup tool with efficient incremental & versionId support"
 authors = [
     "DANDI Developers <team@dandiarchive.org>",
