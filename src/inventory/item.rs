@@ -20,10 +20,6 @@ impl InventoryItem {
         S3Location::new(self.bucket.clone(), self.key.clone())
             .with_version_id(self.version_id.clone())
     }
-
-    pub(crate) fn is_deleted(&self) -> bool {
-        self.details == ItemDetails::Deleted
-    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
