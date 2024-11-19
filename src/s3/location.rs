@@ -59,7 +59,6 @@ impl S3Location {
 
 impl fmt::Display for S3Location {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // TODO: Should the key be percent-encoded?
         write!(f, "s3://{}/{}", self.bucket, self.key)?;
         if let Some(ref v) = self.version_id {
             write!(f, "?versionId={v}")?;
@@ -86,7 +85,6 @@ impl FromStr for S3Location {
         if bucket.is_empty() || !bucket.chars().all(is_bucket_char) {
             return Err(S3LocationError::BadBucket);
         }
-        // TODO: Does the key need to be percent-decoded?
         Ok(S3Location {
             bucket: bucket.to_owned(),
             key: key.to_owned(),
