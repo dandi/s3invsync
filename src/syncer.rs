@@ -1,14 +1,16 @@
 use crate::asyncutil::LimitedShutdownGroup;
-use crate::inventory::InventoryItem;
+use crate::inventory::{InventoryItem, ItemDetails};
 use crate::manifest::CsvManifest;
 use crate::s3::S3Client;
 use anyhow::Context;
+use fs_err::PathExt;
 use futures_util::StreamExt;
 use std::fmt;
 use std::fs::File;
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use time::OffsetDateTime;
 use tokio::sync::mpsc::channel;
 use tokio_util::sync::CancellationToken;
 
@@ -135,49 +137,119 @@ impl Syncer {
         if token.is_cancelled() {
             return Ok(());
         }
-        tracing::info!("Processing object");
-        if item.is_deleted() || !item.is_latest {
-            tracing::info!("Object is deleted or not latest version; skipping");
-            // TODO
-            return Ok(());
-        }
         if let Some(ref rgx) = self.path_filter {
             if !rgx.is_match(&item.key) {
                 tracing::info!("Object key does not match --path-filter; skipping");
                 return Ok(());
             }
         }
-        let url = item.url();
-        let outpath = self.outdir.join(&item.key);
-        tracing::trace!("Creating output directory");
-        if let Some(p) = outpath.parent() {
-            fs_err::create_dir_all(p)?;
-        }
-        // TODO: Download to a temp file and then move
-        tracing::trace!("Opening output file");
-        let outfile = File::create(&outpath)
-            .with_context(|| format!("failed to open output file {}", outpath.display()))?;
-        match token
-            .run_until_cancelled(self.client.download_object(
-                &url,
-                item.details.md5_digest(),
-                &outfile,
-            ))
-            .await
-        {
-            Some(Ok(())) => Ok(()),
-            Some(Err(e)) => {
-                tracing::error!(error = ?e, "Failed to download object");
-                // TODO: Warn on cleanup failure?
-                let _ = self.cleanup_download_path(&outpath);
-                Err(e.into())
+        tracing::info!("Processing object");
+
+        let (dirname, filename) = match item.key.rsplit_once('/') {
+            Some((pre, post)) => (Some(pre), post),
+            None => (None, &*item.key),
+        };
+        // TODO: If `filename` has special meaning to s3invsync, error out
+        let parentdir = if let Some(p) = dirname {
+            self.outdir.join(p)
+        } else {
+            self.outdir.clone()
+        };
+        tracing::trace!(path = %parentdir.display(), "Creating output directory");
+        fs_err::create_dir_all(&parentdir)?;
+
+        let action = match (item.is_latest, &item.details) {
+            (true, ItemDetails::Present { etag, .. }) => {
+                tracing::debug!("Object is latest version of key");
+                let path = parentdir.join(filename);
+                if path.fs_err_try_exists()? {
+                    // TODO: Compare version_id instead?
+                    if mtime_equals(&path, item.last_modified_date)? {
+                        tracing::debug!(path = %path.display(), "Backup path already exists and mtime matches; doing nothing");
+                        ObjectAction::Nop
+                    } else {
+                        todo!()
+                    }
+                } else {
+                    let oldpath =
+                        parentdir.join(format!("{}.old.{}.{}", filename, item.version_id, etag));
+                    if oldpath.fs_err_try_exists()? {
+                        // TODO: Also check mtime?
+                        tracing::debug!(path = %path.display(), oldpath = %oldpath.display(), "Backup path does not exist but \"old\" path does; will rename");
+                        ObjectAction::Move {
+                            src: oldpath,
+                            dest: path,
+                        }
+                    } else {
+                        tracing::debug!(path = %path.display(), "Backup path does not exist; will download");
+                        ObjectAction::Download { path }
+                    }
+                }
             }
-            None => {
-                tracing::debug!("Download cancelled");
-                self.cleanup_download_path(&outpath)?;
+            (false, ItemDetails::Present { etag, .. }) => {
+                tracing::debug!("Object is old version of key");
+                let path = parentdir.join(format!("{}.old.{}.{}", filename, item.version_id, etag));
+                if path.fs_err_try_exists()? {
+                    if mtime_equals(&path, item.last_modified_date)? {
+                        tracing::debug!(path = %path.display(), "Backup path already exists and mtime matches; doing nothing");
+                        ObjectAction::Nop
+                    } else {
+                        todo!()
+                    }
+                } else {
+                    // TODO: Check whether `{filename}` exists and has matching
+                    // version_id (and mtime?); if so, use that
+                    tracing::debug!(path = %path.display(), "Backup path does not exist; will download");
+                    ObjectAction::Download { path }
+                }
+            }
+            (_, ItemDetails::Deleted) => todo!(),
+        };
+
+        match action {
+            ObjectAction::Move { src, dest } => {
+                tracing::debug!(src = %src.display(), dest = %dest.display(), "Moving object file");
+                fs_err::rename(src, dest)?;
                 Ok(())
             }
+            ObjectAction::Download { path } => {
+                // TODO: Download to a temp file and then move
+                tracing::trace!("Opening output file");
+                let outfile = File::create(&path)
+                    .with_context(|| format!("failed to open output file {}", path.display()))?;
+                match token
+                    .run_until_cancelled(self.client.download_object(
+                        &item.url(),
+                        item.details.md5_digest(),
+                        &outfile,
+                    ))
+                    .await
+                {
+                    Some(Ok(())) => {
+                        outfile
+                            .set_modified(item.last_modified_date.into())
+                            .with_context(|| {
+                                format!("failed to set mtime on {}", path.display())
+                            })?;
+                        Ok(())
+                    }
+                    Some(Err(e)) => {
+                        tracing::error!(error = ?e, "Failed to download object");
+                        if let Err(e2) = self.cleanup_download_path(&path) {
+                            tracing::warn!(error = ?e2, "Failed to clean up download file");
+                        }
+                        Err(e.into())
+                    }
+                    None => {
+                        tracing::debug!("Download cancelled");
+                        self.cleanup_download_path(&path)?;
+                        Ok(())
+                    }
+                }
+            }
+            ObjectAction::Nop => Ok(()),
         }
+
         // TODO: Manage object metadata and old versions
         // TODO: Handle concurrent downloads of the same key
     }
@@ -203,6 +275,9 @@ pub(crate) struct MultiError(Vec<anyhow::Error>);
 
 impl fmt::Display for MultiError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.0.len() > 1 {
+            writeln!(f, "{} ERRORS:\n---", self.0.len())?;
+        }
         let mut first = true;
         for e in &self.0 {
             if !std::mem::replace(&mut first, false) {
@@ -216,6 +291,13 @@ impl fmt::Display for MultiError {
 
 impl std::error::Error for MultiError {}
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum ObjectAction {
+    Move { src: PathBuf, dest: PathBuf },
+    Download { path: PathBuf },
+    Nop,
+}
+
 fn is_empty_dir(p: &Path) -> std::io::Result<bool> {
     let mut iter = fs_err::read_dir(p)?;
     match iter.next() {
@@ -223,4 +305,13 @@ fn is_empty_dir(p: &Path) -> std::io::Result<bool> {
         Some(Ok(_)) => Ok(false),
         Some(Err(e)) => Err(e),
     }
+}
+
+fn mtime_equals(p: &Path, ts: OffsetDateTime) -> anyhow::Result<bool> {
+    let m = fs_err::metadata(p)?;
+    let raw_mtime = m
+        .modified()
+        .with_context(|| format!("mtime not available for {}", p.display()))?;
+    let mtime = OffsetDateTime::from(raw_mtime);
+    Ok(mtime == ts)
 }
