@@ -164,8 +164,7 @@ impl S3Client {
             .rsplit_once('/')
             .map_or(&*fspec.key, |(_, after)| after);
         let url = self.inventory_base.with_key(&fspec.key);
-        let outfile =
-            self.make_dl_tempfile(&PathBuf::from(format!("data/{fname}.csv.gz")), &url)?;
+        let outfile = self.make_dl_tempfile(&PathBuf::from(format!("data/{fname}")), &url)?;
         self.download_object(&url, Some(&fspec.md5_checksum), &outfile)
             .await?;
         Ok(InventoryList::from_gzip_csv_file(url, outfile))

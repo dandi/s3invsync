@@ -72,7 +72,14 @@ impl Stream for ListManifestDates {
                 .common_prefixes
                 .unwrap_or_default()
                 .into_iter()
-                .filter_map(|CommonPrefix { prefix, .. }| prefix?.parse::<DateHM>().ok())
+                .filter_map(|CommonPrefix { prefix, .. }| {
+                    prefix?
+                        .strip_suffix('/')?
+                        .rsplit_once('/')
+                        .map(|(_, s)| s)?
+                        .parse::<DateHM>()
+                        .ok()
+                })
                 .collect::<VecDeque<_>>();
         }
     }
