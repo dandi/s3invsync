@@ -168,7 +168,6 @@ impl S3Client {
             self.make_dl_tempfile(&PathBuf::from(format!("data/{fname}.csv.gz")), &url)?;
         self.download_object(&url, Some(&fspec.md5_checksum), &outfile)
             .await?;
-        // TODO: Verify file size?
         Ok(InventoryList::from_gzip_csv_file(url, outfile))
     }
 

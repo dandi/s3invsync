@@ -1,6 +1,3 @@
-use std::num::ParseIntError;
-use thiserror::Error;
-
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(super) struct Scanner<'a, E> {
     s: &'a str,

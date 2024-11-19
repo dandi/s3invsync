@@ -1,6 +1,3 @@
-#![allow(dead_code)] // XXX
-#![allow(unused_imports)] // XXX
-#![allow(clippy::todo)] // XXX
 mod asyncutil;
 mod inventory;
 mod manifest;

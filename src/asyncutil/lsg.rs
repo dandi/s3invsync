@@ -3,12 +3,9 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::task::{Context, Poll};
-use tokio::{
-    sync::{
-        mpsc::{channel, Receiver, Sender},
-        Semaphore,
-    },
-    time::timeout,
+use tokio::sync::{
+    mpsc::{channel, Receiver, Sender},
+    Semaphore,
 };
 use tokio_util::sync::CancellationToken;
 

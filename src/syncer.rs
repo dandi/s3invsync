@@ -3,7 +3,7 @@ use crate::inventory::InventoryItem;
 use crate::manifest::CsvManifest;
 use crate::s3::S3Client;
 use anyhow::Context;
-use futures_util::{stream::select, StreamExt};
+use futures_util::StreamExt;
 use std::fmt;
 use std::fs::File;
 use std::num::NonZeroUsize;
