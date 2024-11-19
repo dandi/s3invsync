@@ -2,6 +2,7 @@ mod location;
 mod streams;
 pub(crate) use self::location::S3Location;
 use self::streams::{ListManifestDates, ListObjectsError};
+use crate::inventory::InventoryList;
 use crate::manifest::CsvManifest;
 use crate::manifest::FileSpec;
 use crate::timestamps::{Date, DateHM, DateMaybeHM};
@@ -11,15 +12,12 @@ use aws_sdk_s3::{
     Client,
 };
 use aws_smithy_runtime_api::client::{orchestrator::HttpResponse, result::SdkError};
-use flate2::bufread::GzDecoder;
 use futures_util::TryStreamExt;
 use md5::{Digest, Md5};
 use std::fs::File;
 use std::io::{BufReader, BufWriter, Seek, Write};
 use std::path::{Path, PathBuf};
 use thiserror::Error;
-
-type CsvReader = csv::Reader<GzDecoder<BufReader<File>>>;
 
 #[derive(Debug)]
 pub(crate) struct S3Client {
@@ -106,16 +104,14 @@ impl S3Client {
     }
 
     async fn get_object(&self, url: &S3Location) -> Result<GetObjectOutput, GetError> {
-        self.inner
-            .get_object()
-            .bucket(url.bucket())
-            .key(url.key())
-            .send()
-            .await
-            .map_err(|source| GetError {
-                url: url.to_owned(),
-                source,
-            })
+        let mut op = self.inner.get_object().bucket(url.bucket()).key(url.key());
+        if let Some(v) = url.version_id() {
+            op = op.version_id(v);
+        }
+        op.send().await.map_err(|source| GetError {
+            url: url.to_owned(),
+            source,
+        })
     }
 
     pub(crate) async fn get_manifest(&self, when: DateHM) -> Result<CsvManifest, GetManifestError> {
@@ -161,8 +157,8 @@ impl S3Client {
 
     pub(crate) async fn download_inventory_csv(
         &self,
-        fspec: &FileSpec,
-    ) -> Result<CsvReader, CsvDownloadError> {
+        fspec: FileSpec,
+    ) -> Result<InventoryList, CsvDownloadError> {
         let fname = fspec
             .key
             .rsplit_once('/')
@@ -172,13 +168,10 @@ impl S3Client {
             self.make_dl_tempfile(&PathBuf::from(format!("data/{fname}.csv.gz")), &url)?;
         self.download_object(&url, Some(&fspec.md5_checksum), &outfile)
             .await?;
-        // TODO: Verify file size?
-        Ok(csv::ReaderBuilder::new()
-            .has_headers(false)
-            .from_reader(GzDecoder::new(BufReader::new(outfile))))
+        Ok(InventoryList::from_gzip_csv_file(url, outfile))
     }
 
-    async fn download_object(
+    pub(crate) async fn download_object(
         &self,
         url: &S3Location,
         // `md5_digest` must be a 32-character lowercase hexadecimal string

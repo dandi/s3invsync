@@ -1,13 +1,14 @@
-#![allow(dead_code)] // XXX
-#![allow(unused_imports)] // XXX
-#![allow(clippy::todo)] // XXX
+mod asyncutil;
 mod inventory;
 mod manifest;
 mod s3;
+mod syncer;
 mod timestamps;
 use crate::s3::{get_bucket_region, S3Client, S3Location};
+use crate::syncer::Syncer;
 use crate::timestamps::DateMaybeHM;
 use clap::Parser;
+use std::num::NonZeroUsize;
 use std::path::PathBuf;
 
 #[derive(Clone, Debug, Eq, Parser, PartialEq)]
@@ -15,6 +16,12 @@ use std::path::PathBuf;
 struct Arguments {
     #[arg(short, long)]
     date: Option<DateMaybeHM>,
+
+    #[arg(short = 'I', long, default_value = "20")]
+    inventory_jobs: NonZeroUsize,
+
+    #[arg(short = 'O', long, default_value = "20")]
+    object_jobs: NonZeroUsize,
 
     inventory_base: S3Location,
 
@@ -27,15 +34,7 @@ async fn main() -> anyhow::Result<()> {
     let region = get_bucket_region(args.inventory_base.bucket()).await?;
     let client = S3Client::new(region, args.inventory_base).await?;
     let manifest = client.get_manifest_for_date(args.date).await?;
-    for fspec in &manifest.files {
-        // TODO: Add to pool of concurrent download tasks?
-        client.download_inventory_csv(fspec).await?;
-        // TODO: For each entry in CSV:
-        // - Download object (in a task pool)
-        // - Manage object metadata and old versions
-        // - Handle concurrent downloads of the same key
-        todo!()
-    }
-    // TODO: Handle error recovery and Ctrl-C
+    let syncer = Syncer::new(client, args.outdir, args.inventory_jobs, args.object_jobs);
+    syncer.run(manifest).await?;
     Ok(())
 }

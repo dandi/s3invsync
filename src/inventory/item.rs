@@ -1,3 +1,4 @@
+use crate::s3::S3Location;
 use serde::{de, Deserialize};
 use std::fmt;
 use thiserror::Error;
@@ -6,12 +7,23 @@ use time::OffsetDateTime;
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 #[serde(try_from = "RawInventoryItem")]
 pub(crate) struct InventoryItem {
-    bucket: String,
-    key: String,
-    version_id: String,
-    is_latest: bool,
-    last_modified_date: OffsetDateTime,
-    details: ItemDetails,
+    pub(crate) bucket: String,
+    pub(crate) key: String,
+    pub(crate) version_id: String,
+    pub(crate) is_latest: bool,
+    pub(crate) last_modified_date: OffsetDateTime,
+    pub(crate) details: ItemDetails,
+}
+
+impl InventoryItem {
+    pub(crate) fn url(&self) -> S3Location {
+        S3Location::new(self.bucket.clone(), self.key.clone())
+            .with_version_id(self.version_id.clone())
+    }
+
+    pub(crate) fn is_deleted(&self) -> bool {
+        self.details == ItemDetails::Deleted
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
