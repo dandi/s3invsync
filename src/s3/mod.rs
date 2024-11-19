@@ -3,8 +3,7 @@ mod streams;
 pub(crate) use self::location::S3Location;
 use self::streams::{ListManifestDates, ListObjectsError};
 use crate::inventory::InventoryList;
-use crate::manifest::CsvManifest;
-use crate::manifest::FileSpec;
+use crate::manifest::{CsvManifest, FileSpec};
 use crate::timestamps::{Date, DateHM, DateMaybeHM};
 use aws_sdk_s3::{
     operation::get_object::{GetObjectError, GetObjectOutput},
@@ -50,6 +49,7 @@ impl S3Client {
     }
 
     fn make_dl_tempfile(&self, subpath: &Path, objloc: &S3Location) -> Result<File, TempfileError> {
+        tracing::trace!(url = %objloc, "Creating temporary file for downloading object");
         let path = self.tmpdir.path().join(subpath);
         if let Some(p) = path.parent() {
             std::fs::create_dir_all(p).map_err(|source| TempfileError::Mkdir {
@@ -78,6 +78,7 @@ impl S3Client {
             Some(DateMaybeHM::Date(d)) => self.get_latest_manifest_timestamp(Some(d)).await?,
             Some(DateMaybeHM::DateHM(d)) => d,
         };
+        tracing::info!(timestamp = %ts, "Getting manifest for timestamp");
         self.get_manifest(ts).await
     }
 
@@ -87,9 +88,12 @@ impl S3Client {
     ) -> Result<DateHM, FindManifestError> {
         // Iterate over `DateHM` prefixes in `s3://{inv_bucket}/{inv_prefix}/`
         // or `s3://{inv_bucket}/{inv_prefix}/{day}T` and return greatest one
-        let url = match day {
-            Some(d) => self.inventory_base.join(&format!("{d}T")),
-            None => self.inventory_base.join(""),
+        let url = if let Some(d) = day {
+            tracing::debug!(date = %d, "Listing manifests for date ...");
+            self.inventory_base.join(&format!("{d}T"))
+        } else {
+            tracing::debug!("Listing all manifests ...");
+            self.inventory_base.join("")
         };
         let mut stream = ListManifestDates::new(self, url.clone());
         let mut maxdate = None;
@@ -176,6 +180,7 @@ impl S3Client {
         Ok(InventoryList::from_gzip_csv_file(url, outfile))
     }
 
+    #[tracing::instrument(skip_all, fields(url = %url))]
     pub(crate) async fn download_object(
         &self,
         url: &S3Location,
@@ -183,6 +188,7 @@ impl S3Client {
         md5_digest: Option<&str>,
         outfile: &File,
     ) -> Result<(), DownloadError> {
+        tracing::debug!("Downloading object to disk");
         let obj = self.get_object(url).await?;
         let mut bytestream = obj.body;
         let mut outfile = BufWriter::new(outfile);
@@ -218,6 +224,7 @@ impl S3Client {
                 });
             }
         }
+        tracing::debug!("Finished download");
         Ok(())
     }
 }

@@ -107,6 +107,7 @@ impl Syncer {
         }
     }
 
+    #[tracing::instrument(skip_all, fields(url = %item.url()))]
     async fn process_item(
         self: &Arc<Self>,
         item: InventoryItem,
@@ -115,21 +116,26 @@ impl Syncer {
         if token.is_cancelled() {
             return Ok(());
         }
+        tracing::info!("Processing object");
         if item.is_deleted() || !item.is_latest {
+            tracing::info!("Object is deleted or not latest version; skipping");
             // TODO
             return Ok(());
         }
         if let Some(ref rgx) = self.path_filter {
             if !rgx.is_match(&item.key) {
+                tracing::info!("Object key does not match --path-filter; skipping");
                 return Ok(());
             }
         }
         let url = item.url();
         let outpath = self.outdir.join(&item.key);
+        tracing::trace!("Creating output directory");
         if let Some(p) = outpath.parent() {
             fs_err::create_dir_all(p)?;
         }
         // TODO: Download to a temp file and then move
+        tracing::trace!("Opening output file");
         let outfile = File::create(&outpath)
             .with_context(|| format!("failed to open output file {}", outpath.display()))?;
         match token
@@ -142,11 +148,13 @@ impl Syncer {
         {
             Some(Ok(())) => Ok(()),
             Some(Err(e)) => {
-                // TODO: Warn on failure?
+                tracing::error!(error = ?e, "Failed to download object");
+                // TODO: Warn on cleanup failure?
                 let _ = self.cleanup_download_path(&outpath);
                 Err(e.into())
             }
             None => {
+                tracing::debug!("Download cancelled");
                 self.cleanup_download_path(&outpath)?;
                 Ok(())
             }
@@ -156,6 +164,7 @@ impl Syncer {
     }
 
     fn cleanup_download_path(&self, dlfile: &Path) -> std::io::Result<()> {
+        tracing::trace!(path = %dlfile.display(), "Cleaning up unfinished download file");
         fs_err::remove_file(dlfile)?;
         let p = dlfile.parent();
         while let Some(pp) = p {
