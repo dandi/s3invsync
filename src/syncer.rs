@@ -119,8 +119,7 @@ impl Syncer {
         let url = item.url();
         let outpath = self.outdir.join(&item.key);
         if let Some(p) = outpath.parent() {
-            std::fs::create_dir_all(p)
-                .with_context(|| format!("failed to create parent directory {}", p.display()))?;
+            fs_err::create_dir_all(p)?;
         }
         // TODO: Download to a temp file and then move
         let outfile = File::create(&outpath)
@@ -139,21 +138,24 @@ impl Syncer {
                 let _ = self.cleanup_download_path(&outpath);
                 Err(e.into())
             }
-            None => self.cleanup_download_path(&outpath),
+            None => {
+                self.cleanup_download_path(&outpath)?;
+                Ok(())
+            }
         }
         // TODO: Manage object metadata and old versions
         // TODO: Handle concurrent downloads of the same key
     }
 
-    fn cleanup_download_path(&self, dlfile: &Path) -> anyhow::Result<()> {
-        std::fs::remove_file(dlfile)?;
+    fn cleanup_download_path(&self, dlfile: &Path) -> std::io::Result<()> {
+        fs_err::remove_file(dlfile)?;
         let p = dlfile.parent();
         while let Some(pp) = p {
             if pp == self.outdir {
                 break;
             }
             if is_empty_dir(pp)? {
-                std::fs::remove_dir(pp)?;
+                fs_err::remove_dir(pp)?;
             }
         }
         Ok(())
@@ -179,7 +181,7 @@ impl fmt::Display for MultiError {
 impl std::error::Error for MultiError {}
 
 fn is_empty_dir(p: &Path) -> std::io::Result<bool> {
-    let mut iter = std::fs::read_dir(p)?;
+    let mut iter = fs_err::read_dir(p)?;
     match iter.next() {
         None => Ok(true),
         Some(Ok(_)) => Ok(false),
