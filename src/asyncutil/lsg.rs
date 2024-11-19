@@ -60,11 +60,13 @@ impl<T: Send + 'static> LimitedShutdownGroup<T> {
         }
     }
 
+    pub(crate) fn close(&self) {
+        let mut s = self.sender.lock().unwrap_or_else(PoisonError::into_inner);
+        *s = None;
+    }
+
     pub(crate) fn shutdown(&self) {
-        {
-            let mut s = self.sender.lock().unwrap_or_else(PoisonError::into_inner);
-            *s = None;
-        }
+        self.close();
         self.semaphore.close();
         self.token.cancel();
     }
