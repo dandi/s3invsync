@@ -120,7 +120,7 @@ async fn download_object(
     if token.is_cancelled() {
         return Ok(());
     }
-    let url = S3Location::new(item.bucket, item.key.clone()).with_version_id(item.version_id);
+    let url = item.url();
     let outpath = if item.is_latest {
         outdir.join(&item.key)
     } else {

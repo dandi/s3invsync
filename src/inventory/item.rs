@@ -1,3 +1,4 @@
+use crate::s3::S3Location;
 use serde::{de, Deserialize};
 use std::fmt;
 use thiserror::Error;
@@ -12,6 +13,13 @@ pub(crate) struct InventoryItem {
     pub(crate) is_latest: bool,
     pub(crate) last_modified_date: OffsetDateTime,
     pub(crate) details: ItemDetails,
+}
+
+impl InventoryItem {
+    pub(crate) fn url(&self) -> S3Location {
+        S3Location::new(self.bucket.clone(), self.key.clone())
+            .with_version_id(self.version_id.clone())
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
