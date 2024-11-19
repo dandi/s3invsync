@@ -1907,6 +1907,7 @@ dependencies = [
  "hex",
  "md-5",
  "percent-encoding",
+ "regex",
  "reqwest",
  "rstest",
  "serde",
