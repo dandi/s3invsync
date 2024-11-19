@@ -164,9 +164,15 @@ impl S3Client {
             .rsplit_once('/')
             .map_or(&*fspec.key, |(_, after)| after);
         let url = self.inventory_base.with_key(&fspec.key);
-        let outfile = self.make_dl_tempfile(&PathBuf::from(format!("data/{fname}")), &url)?;
+        let mut outfile = self.make_dl_tempfile(&PathBuf::from(format!("data/{fname}")), &url)?;
         self.download_object(&url, Some(&fspec.md5_checksum), &outfile)
             .await?;
+        outfile
+            .rewind()
+            .map_err(|source| CsvDownloadError::Rewind {
+                url: url.clone(),
+                source,
+            })?;
         Ok(InventoryList::from_gzip_csv_file(url, outfile))
     }
 
@@ -304,6 +310,11 @@ pub(crate) enum CsvDownloadError {
     Tempfile(#[from] TempfileError),
     #[error(transparent)]
     Download(#[from] DownloadError),
+    #[error("failed to rewind tempfile after downloading {url}")]
+    Rewind {
+        url: S3Location,
+        source: std::io::Error,
+    },
 }
 
 #[derive(Debug, Error)]
