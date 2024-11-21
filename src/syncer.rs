@@ -176,59 +176,62 @@ impl Syncer {
 
         let actions = if item.is_latest {
             tracing::debug!("Object is latest version of key");
-            let path = parentdir.join(filename);
-            if path.fs_err_try_exists()? {
+            let latest_path = parentdir.join(filename);
+            if latest_path.fs_err_try_exists()? {
                 let current_md = mdmanager.get()?;
                 if md == current_md {
-                    tracing::debug!(path = %path.display(), "Backup path already exists and metadata matches; doing nothing");
+                    tracing::debug!(path = %latest_path.display(), "Backup path already exists and metadata matches; doing nothing");
                     Vec::new()
                 } else {
-                    tracing::debug!(path = %path.display(), "Backup path already exists but metadata does not match; renaming current file and downloading correct version");
+                    tracing::debug!(path = %latest_path.display(), "Backup path already exists but metadata does not match; renaming current file and downloading correct version");
                     vec![
                         ObjectAction::Move {
-                            src: path.clone(),
+                            src: latest_path.clone(),
                             dest: parentdir.join(current_md.old_filename(filename)),
                         },
-                        ObjectAction::Download { path },
+                        ObjectAction::Download { path: latest_path },
                         ObjectAction::SaveMetadata,
                     ]
                 }
             } else {
                 let oldpath = parentdir.join(md.old_filename(filename));
                 if oldpath.fs_err_try_exists()? {
-                    tracing::debug!(path = %path.display(), oldpath = %oldpath.display(), "Backup path does not exist but \"old\" path does; will rename");
+                    tracing::debug!(path = %latest_path.display(), oldpath = %oldpath.display(), "Backup path does not exist but \"old\" path does; will rename");
                     vec![
                         ObjectAction::Move {
                             src: oldpath,
-                            dest: path,
+                            dest: latest_path,
                         },
                         ObjectAction::SaveMetadata,
                     ]
                 } else {
-                    tracing::debug!(path = %path.display(), "Backup path does not exist; will download");
-                    vec![ObjectAction::Download { path }, ObjectAction::SaveMetadata]
+                    tracing::debug!(path = %latest_path.display(), "Backup path does not exist; will download");
+                    vec![
+                        ObjectAction::Download { path: latest_path },
+                        ObjectAction::SaveMetadata,
+                    ]
                 }
             }
         } else {
             tracing::debug!("Object is old version of key");
-            let path = parentdir.join(md.old_filename(filename));
-            if path.fs_err_try_exists()? {
-                tracing::debug!(path = %path.display(), "Backup path already exists; doing nothing");
+            let oldpath = parentdir.join(md.old_filename(filename));
+            if oldpath.fs_err_try_exists()? {
+                tracing::debug!(path = %oldpath.display(), "Backup path already exists; doing nothing");
                 Vec::new()
             } else {
-                let newpath = parentdir.join(filename);
-                if newpath.fs_err_try_exists()? && md == mdmanager.get()? {
-                    tracing::debug!(path = %path.display(), "Backup path does not exist, but \"latest\" file has matching metadata; renaming \"latest\" file");
+                let latest_path = parentdir.join(filename);
+                if latest_path.fs_err_try_exists()? && md == mdmanager.get()? {
+                    tracing::debug!(path = %oldpath.display(), "Backup path does not exist, but \"latest\" file has matching metadata; renaming \"latest\" file");
                     vec![
                         ObjectAction::Move {
-                            src: newpath,
-                            dest: path,
+                            src: latest_path,
+                            dest: oldpath,
                         },
                         ObjectAction::DeleteMetadata,
                     ]
                 } else {
-                    tracing::debug!(path = %path.display(), "Backup path does not exist; will download");
-                    vec![ObjectAction::Download { path }]
+                    tracing::debug!(path = %oldpath.display(), "Backup path does not exist; will download");
+                    vec![ObjectAction::Download { path: oldpath }]
                 }
             }
         };
