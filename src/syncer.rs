@@ -5,6 +5,8 @@ use crate::s3::S3Client;
 use anyhow::Context;
 use fs_err::PathExt;
 use futures_util::StreamExt;
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::fmt;
 use std::fs::File;
 use std::num::NonZeroUsize;
@@ -168,12 +170,13 @@ impl Syncer {
         };
         tracing::trace!(path = %parentdir.display(), "Creating output directory");
         fs_err::create_dir_all(&parentdir)?;
+        let mdmanager = MetadataManager::new(&parentdir, filename);
 
         let actions = if item.is_latest {
             tracing::debug!("Object is latest version of key");
             let path = parentdir.join(filename);
             if path.fs_err_try_exists()? {
-                let current_md = self.get_metadata(&parentdir, filename).await?;
+                let current_md = mdmanager.get()?;
                 if md == current_md {
                     tracing::debug!(path = %path.display(), "Backup path already exists and metadata matches; doing nothing");
                     Vec::new()
@@ -212,9 +215,7 @@ impl Syncer {
                 Vec::new()
             } else {
                 let newpath = parentdir.join(filename);
-                if newpath.fs_err_try_exists()?
-                    && md == self.get_metadata(&parentdir, filename).await?
-                {
+                if newpath.fs_err_try_exists()? && md == mdmanager.get()? {
                     tracing::debug!(path = %path.display(), "Backup path does not exist, but \"latest\" file has matching metadata; renaming \"latest\" file");
                     vec![
                         ObjectAction::Move {
@@ -272,33 +273,14 @@ impl Syncer {
                 }
                 // TODO: Handle cancellation/cleanup around metadata
                 // management:
-                ObjectAction::SaveMetadata => {
-                    self.save_metadata(&parentdir, filename, md.clone()).await?;
-                }
-                ObjectAction::DeleteMetadata => self.delete_metadata(&parentdir, filename).await?,
+                ObjectAction::SaveMetadata => mdmanager.set(md.clone())?,
+                ObjectAction::DeleteMetadata => mdmanager.delete()?,
             }
         }
         Ok(())
 
         // TODO: Manage object metadata and old versions
         // TODO: Handle concurrent downloads of the same key
-    }
-
-    async fn get_metadata(&self, parentdir: &Path, filename: &str) -> anyhow::Result<Metadata> {
-        todo!()
-    }
-
-    async fn save_metadata(
-        &self,
-        parentdir: &Path,
-        filename: &str,
-        md: Metadata,
-    ) -> anyhow::Result<()> {
-        todo!()
-    }
-
-    async fn delete_metadata(&self, parentdir: &Path, filename: &str) -> anyhow::Result<()> {
-        todo!()
     }
 
     fn cleanup_download_path(&self, dlfile: &Path) -> std::io::Result<()> {
@@ -346,7 +328,7 @@ enum ObjectAction {
     DeleteMetadata,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 struct Metadata {
     version_id: String,
     etag: String,
@@ -355,6 +337,70 @@ struct Metadata {
 impl Metadata {
     fn old_filename(&self, basename: &str) -> String {
         format!("{}.old.{}.{}", basename, self.version_id, self.etag)
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct MetadataManager<'a> {
+    database_path: PathBuf,
+    filename: &'a str,
+}
+
+impl<'a> MetadataManager<'a> {
+    fn new(parentdir: &Path, filename: &'a str) -> Self {
+        MetadataManager {
+            database_path: parentdir.join(".s3invsync.versions.json"),
+            filename,
+        }
+    }
+
+    fn load(&self) -> anyhow::Result<BTreeMap<String, Metadata>> {
+        let content = fs_err::read_to_string(&self.database_path)?;
+        serde_json::from_str(&content).with_context(|| {
+            format!(
+                "failed to deserialize contents of {}",
+                self.database_path.display()
+            )
+        })
+    }
+
+    fn store(&self, data: BTreeMap<String, Metadata>) -> anyhow::Result<()> {
+        let fp = fs_err::File::create(&self.database_path)?;
+        // TODO: Write to tempfile and then move
+        serde_json::to_writer_pretty(fp, &data)
+            .with_context(|| {
+                format!(
+                    "failed to serialize metadata to {}",
+                    self.database_path.display()
+                )
+            })
+            .map_err(Into::into)
+    }
+
+    fn get(&self) -> anyhow::Result<Metadata> {
+        let Some(md) = self.load()?.remove(self.filename) else {
+            anyhow::bail!(
+                "No entry for {:?} in {}",
+                self.filename,
+                self.database_path.display()
+            );
+        };
+        Ok(md)
+    }
+
+    fn set(&self, md: Metadata) -> anyhow::Result<()> {
+        let mut data = self.load()?;
+        data.insert(self.filename.to_owned(), md);
+        self.store(data)?;
+        Ok(())
+    }
+
+    fn delete(&self) -> anyhow::Result<()> {
+        let mut data = self.load()?;
+        if data.remove(self.filename).is_some() {
+            self.store(data)?;
+        }
+        Ok(())
     }
 }
 
