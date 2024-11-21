@@ -4,6 +4,7 @@ mod manifest;
 mod s3;
 mod syncer;
 mod timestamps;
+mod util;
 use crate::s3::{get_bucket_region, S3Client, S3Location};
 use crate::syncer::Syncer;
 use crate::timestamps::DateMaybeHM;

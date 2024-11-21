@@ -2,12 +2,12 @@ use crate::asyncutil::LimitedShutdownGroup;
 use crate::inventory::{InventoryItem, ItemDetails};
 use crate::manifest::CsvManifest;
 use crate::s3::S3Client;
+use crate::util::{check_normed_posix_path, is_empty_dir, MultiError};
 use anyhow::Context;
 use fs_err::PathExt;
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-use std::fmt;
 use std::fs::File;
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
@@ -158,6 +158,7 @@ impl Syncer {
             etag: etag.to_owned(),
         };
 
+        check_normed_posix_path(&item.key)?;
         let (dirname, filename) = match item.key.rsplit_once('/') {
             Some((pre, post)) => (Some(pre), post),
             None => (None, &*item.key),
@@ -298,28 +299,6 @@ impl Syncer {
         Ok(())
     }
 }
-
-#[derive(Debug)]
-pub(crate) struct MultiError(Vec<anyhow::Error>);
-
-impl fmt::Display for MultiError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if self.0.len() > 1 {
-            writeln!(f, "{} ERRORS:\n---", self.0.len())?;
-        }
-        let mut first = true;
-        for e in &self.0 {
-            if !std::mem::replace(&mut first, false) {
-                writeln!(f, "\n---")?;
-            }
-            write!(f, "{e:?}")?;
-        }
-        Ok(())
-    }
-}
-
-impl std::error::Error for MultiError {}
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum ObjectAction {
     Move { src: PathBuf, dest: PathBuf },
@@ -401,14 +380,5 @@ impl<'a> MetadataManager<'a> {
             self.store(data)?;
         }
         Ok(())
-    }
-}
-
-fn is_empty_dir(p: &Path) -> std::io::Result<bool> {
-    let mut iter = fs_err::read_dir(p)?;
-    match iter.next() {
-        None => Ok(true),
-        Some(Ok(_)) => Ok(false),
-        Some(Err(e)) => Err(e),
     }
 }
