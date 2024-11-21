@@ -1,8 +1,9 @@
 use crate::asyncutil::LimitedShutdownGroup;
+use crate::consts::METADATA_FILENAME;
 use crate::inventory::{InventoryItem, ItemDetails};
 use crate::manifest::CsvManifest;
 use crate::s3::S3Client;
-use crate::util::{check_normed_posix_path, is_empty_dir, MultiError};
+use crate::util::*;
 use anyhow::Context;
 use fs_err::PathExt;
 use futures_util::StreamExt;
@@ -163,7 +164,7 @@ impl Syncer {
             Some((pre, post)) => (Some(pre), post),
             None => (None, &*item.key),
         };
-        // TODO: If `filename` has special meaning to s3invsync, error out
+        check_special_filename(filename)?;
         let parentdir = if let Some(p) = dirname {
             self.outdir.join(p)
         } else {
@@ -328,7 +329,7 @@ struct MetadataManager<'a> {
 impl<'a> MetadataManager<'a> {
     fn new(parentdir: &Path, filename: &'a str) -> Self {
         MetadataManager {
-            database_path: parentdir.join(".s3invsync.versions.json"),
+            database_path: parentdir.join(METADATA_FILENAME),
             filename,
         }
     }

@@ -1,3 +1,4 @@
+use crate::consts::METADATA_FILENAME;
 use std::fmt;
 use std::path::Path;
 use thiserror::Error;
@@ -73,4 +74,53 @@ pub(crate) enum PurePathError {
     Nul { key: String },
     #[error("key {key:?} is not a valid filepath: not normalized")]
     NotNormalized { key: String },
+}
+
+// Reject filenames that equal `METADATA_FILENAME` or look like
+// `{filename}.old.{version_id}.{etag}` (specifically, that are of the form
+// `{nonempty}.old.{nonempty}.{nonempty}`)
+pub(crate) fn check_special_filename(filename: &str) -> Result<(), SpecialFilenameError> {
+    if filename == METADATA_FILENAME {
+        return Err(SpecialFilenameError {
+            filename: filename.to_owned(),
+        });
+    }
+    if let Some(i) = filename.find(".old.").filter(|&i| i > 0) {
+        let post_old = &filename[(i + 5)..];
+        if post_old
+            .find('.')
+            .is_some_and(|j| (1..(post_old.len() - 1)).contains(&j))
+        {
+            return Err(SpecialFilenameError {
+                filename: filename.to_owned(),
+            });
+        }
+    }
+    Ok(())
+}
+
+#[derive(Clone, Debug, Eq, Error, PartialEq)]
+#[error("cannot back up object with special filename {filename:?}")]
+pub(crate) struct SpecialFilenameError {
+    filename: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rstest::rstest;
+
+    #[rstest]
+    #[case("foo", true)]
+    #[case("foo.old", true)]
+    #[case("foo.old.bar", true)]
+    #[case("foo.old.bar.baz", false)]
+    #[case("foo.old.bar.baz.quux.glarch", false)]
+    #[case("foo.old.bar.", true)]
+    #[case(".old.bar.baz", true)]
+    #[case("foo.old..baz", true)]
+    #[case("foo.old..", true)]
+    fn test_check_special_filename(#[case] s: &str, #[case] ok: bool) {
+        assert_eq!(check_special_filename(s).is_ok(), ok);
+    }
 }
