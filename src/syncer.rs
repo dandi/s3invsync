@@ -1,10 +1,14 @@
 use crate::asyncutil::LimitedShutdownGroup;
-use crate::inventory::InventoryItem;
+use crate::consts::METADATA_FILENAME;
+use crate::inventory::{InventoryItem, ItemDetails};
 use crate::manifest::CsvManifest;
 use crate::s3::S3Client;
+use crate::util::*;
 use anyhow::Context;
+use fs_err::PathExt;
 use futures_util::StreamExt;
-use std::fmt;
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::fs::File;
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
@@ -135,49 +139,151 @@ impl Syncer {
         if token.is_cancelled() {
             return Ok(());
         }
-        tracing::info!("Processing object");
-        if item.is_deleted() || !item.is_latest {
-            tracing::info!("Object is deleted or not latest version; skipping");
-            // TODO
-            return Ok(());
-        }
         if let Some(ref rgx) = self.path_filter {
             if !rgx.is_match(&item.key) {
                 tracing::info!("Object key does not match --path-filter; skipping");
                 return Ok(());
             }
         }
-        let url = item.url();
-        let outpath = self.outdir.join(&item.key);
-        tracing::trace!("Creating output directory");
-        if let Some(p) = outpath.parent() {
-            fs_err::create_dir_all(p)?;
-        }
-        // TODO: Download to a temp file and then move
-        tracing::trace!("Opening output file");
-        let outfile = File::create(&outpath)
-            .with_context(|| format!("failed to open output file {}", outpath.display()))?;
-        match token
-            .run_until_cancelled(self.client.download_object(
-                &url,
-                item.details.md5_digest(),
-                &outfile,
-            ))
-            .await
-        {
-            Some(Ok(())) => Ok(()),
-            Some(Err(e)) => {
-                tracing::error!(error = ?e, "Failed to download object");
-                // TODO: Warn on cleanup failure?
-                let _ = self.cleanup_download_path(&outpath);
-                Err(e.into())
+        tracing::info!("Processing object");
+
+        let etag = match item.details {
+            ItemDetails::Present { ref etag, .. } => etag,
+            ItemDetails::Deleted => {
+                tracing::debug!("Object is delete marker; not doing anything");
+                return Ok(());
             }
-            None => {
-                tracing::debug!("Download cancelled");
-                self.cleanup_download_path(&outpath)?;
-                Ok(())
+        };
+        let md = Metadata {
+            version_id: item.version_id.clone(),
+            etag: etag.to_owned(),
+        };
+
+        check_normed_posix_path(&item.key)?;
+        let (dirname, filename) = match item.key.rsplit_once('/') {
+            Some((pre, post)) => (Some(pre), post),
+            None => (None, &*item.key),
+        };
+        check_special_filename(filename)?;
+        let parentdir = if let Some(p) = dirname {
+            self.outdir.join(p)
+        } else {
+            self.outdir.clone()
+        };
+        tracing::trace!(path = %parentdir.display(), "Creating output directory");
+        fs_err::create_dir_all(&parentdir)?;
+        let mdmanager = MetadataManager::new(&parentdir, filename);
+
+        let actions = if item.is_latest {
+            tracing::debug!("Object is latest version of key");
+            let latest_path = parentdir.join(filename);
+            if latest_path.fs_err_try_exists()? {
+                let current_md = mdmanager.get()?;
+                if md == current_md {
+                    tracing::debug!(path = %latest_path.display(), "Backup path already exists and metadata matches; doing nothing");
+                    Vec::new()
+                } else {
+                    tracing::debug!(path = %latest_path.display(), "Backup path already exists but metadata does not match; renaming current file and downloading correct version");
+                    vec![
+                        ObjectAction::Move {
+                            src: latest_path.clone(),
+                            dest: parentdir.join(current_md.old_filename(filename)),
+                        },
+                        ObjectAction::Download { path: latest_path },
+                        ObjectAction::SaveMetadata,
+                    ]
+                }
+            } else {
+                let oldpath = parentdir.join(md.old_filename(filename));
+                if oldpath.fs_err_try_exists()? {
+                    tracing::debug!(path = %latest_path.display(), oldpath = %oldpath.display(), "Backup path does not exist but \"old\" path does; will rename");
+                    vec![
+                        ObjectAction::Move {
+                            src: oldpath,
+                            dest: latest_path,
+                        },
+                        ObjectAction::SaveMetadata,
+                    ]
+                } else {
+                    tracing::debug!(path = %latest_path.display(), "Backup path does not exist; will download");
+                    vec![
+                        ObjectAction::Download { path: latest_path },
+                        ObjectAction::SaveMetadata,
+                    ]
+                }
+            }
+        } else {
+            tracing::debug!("Object is old version of key");
+            let oldpath = parentdir.join(md.old_filename(filename));
+            if oldpath.fs_err_try_exists()? {
+                tracing::debug!(path = %oldpath.display(), "Backup path already exists; doing nothing");
+                Vec::new()
+            } else {
+                let latest_path = parentdir.join(filename);
+                if latest_path.fs_err_try_exists()? && md == mdmanager.get()? {
+                    tracing::debug!(path = %oldpath.display(), "Backup path does not exist, but \"latest\" file has matching metadata; renaming \"latest\" file");
+                    vec![
+                        ObjectAction::Move {
+                            src: latest_path,
+                            dest: oldpath,
+                        },
+                        ObjectAction::DeleteMetadata,
+                    ]
+                } else {
+                    tracing::debug!(path = %oldpath.display(), "Backup path does not exist; will download");
+                    vec![ObjectAction::Download { path: oldpath }]
+                }
+            }
+        };
+
+        for act in actions {
+            match act {
+                ObjectAction::Move { src, dest } => {
+                    tracing::debug!(src = %src.display(), dest = %dest.display(), "Moving object file");
+                    fs_err::rename(src, dest)?;
+                }
+                ObjectAction::Download { path } => {
+                    // TODO: Download to a temp file and then move
+                    tracing::trace!("Opening output file");
+                    let outfile = File::create(&path).with_context(|| {
+                        format!("failed to open output file {}", path.display())
+                    })?;
+                    match token
+                        .run_until_cancelled(self.client.download_object(
+                            &item.url(),
+                            item.details.md5_digest(),
+                            &outfile,
+                        ))
+                        .await
+                    {
+                        Some(Ok(())) => {
+                            outfile
+                                .set_modified(item.last_modified_date.into())
+                                .with_context(|| {
+                                    format!("failed to set mtime on {}", path.display())
+                                })?;
+                        }
+                        Some(Err(e)) => {
+                            tracing::error!(error = ?e, "Failed to download object");
+                            if let Err(e2) = self.cleanup_download_path(&path) {
+                                tracing::warn!(error = ?e2, "Failed to clean up download file");
+                            }
+                            return Err(e.into());
+                        }
+                        None => {
+                            tracing::debug!("Download cancelled");
+                            self.cleanup_download_path(&path)?;
+                        }
+                    }
+                }
+                // TODO: Handle cancellation/cleanup around metadata
+                // management:
+                ObjectAction::SaveMetadata => mdmanager.set(md.clone())?,
+                ObjectAction::DeleteMetadata => mdmanager.delete()?,
             }
         }
+        Ok(())
+
         // TODO: Manage object metadata and old versions
         // TODO: Handle concurrent downloads of the same key
     }
@@ -197,30 +303,86 @@ impl Syncer {
         Ok(())
     }
 }
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum ObjectAction {
+    Move { src: PathBuf, dest: PathBuf },
+    Download { path: PathBuf },
+    SaveMetadata,
+    DeleteMetadata,
+}
 
-#[derive(Debug)]
-pub(crate) struct MultiError(Vec<anyhow::Error>);
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+struct Metadata {
+    version_id: String,
+    etag: String,
+}
 
-impl fmt::Display for MultiError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut first = true;
-        for e in &self.0 {
-            if !std::mem::replace(&mut first, false) {
-                writeln!(f, "\n---")?;
-            }
-            write!(f, "{e:?}")?;
-        }
-        Ok(())
+impl Metadata {
+    fn old_filename(&self, basename: &str) -> String {
+        format!("{}.old.{}.{}", basename, self.version_id, self.etag)
     }
 }
 
-impl std::error::Error for MultiError {}
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct MetadataManager<'a> {
+    database_path: PathBuf,
+    filename: &'a str,
+}
 
-fn is_empty_dir(p: &Path) -> std::io::Result<bool> {
-    let mut iter = fs_err::read_dir(p)?;
-    match iter.next() {
-        None => Ok(true),
-        Some(Ok(_)) => Ok(false),
-        Some(Err(e)) => Err(e),
+impl<'a> MetadataManager<'a> {
+    fn new(parentdir: &Path, filename: &'a str) -> Self {
+        MetadataManager {
+            database_path: parentdir.join(METADATA_FILENAME),
+            filename,
+        }
+    }
+
+    fn load(&self) -> anyhow::Result<BTreeMap<String, Metadata>> {
+        let content = fs_err::read_to_string(&self.database_path)?;
+        serde_json::from_str(&content).with_context(|| {
+            format!(
+                "failed to deserialize contents of {}",
+                self.database_path.display()
+            )
+        })
+    }
+
+    fn store(&self, data: BTreeMap<String, Metadata>) -> anyhow::Result<()> {
+        let fp = fs_err::File::create(&self.database_path)?;
+        // TODO: Write to tempfile and then move
+        serde_json::to_writer_pretty(fp, &data)
+            .with_context(|| {
+                format!(
+                    "failed to serialize metadata to {}",
+                    self.database_path.display()
+                )
+            })
+            .map_err(Into::into)
+    }
+
+    fn get(&self) -> anyhow::Result<Metadata> {
+        let Some(md) = self.load()?.remove(self.filename) else {
+            anyhow::bail!(
+                "No entry for {:?} in {}",
+                self.filename,
+                self.database_path.display()
+            );
+        };
+        Ok(md)
+    }
+
+    fn set(&self, md: Metadata) -> anyhow::Result<()> {
+        let mut data = self.load()?;
+        data.insert(self.filename.to_owned(), md);
+        self.store(data)?;
+        Ok(())
+    }
+
+    fn delete(&self) -> anyhow::Result<()> {
+        let mut data = self.load()?;
+        if data.remove(self.filename).is_some() {
+            self.store(data)?;
+        }
+        Ok(())
     }
 }
