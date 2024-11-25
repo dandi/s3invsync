@@ -285,6 +285,7 @@ impl Syncer {
     }
 
     fn cleanup_download_path(&self, dlfile: &Path) -> std::io::Result<()> {
+        // TODO: Synchronize calls to this method?
         tracing::trace!(path = %dlfile.display(), "Cleaning up unfinished download file");
         fs_err::remove_file(dlfile)?;
         let p = dlfile.parent();
@@ -293,7 +294,11 @@ impl Syncer {
                 break;
             }
             if is_empty_dir(pp)? {
-                fs_err::remove_dir(pp)?;
+                match fs_err::remove_dir(pp) {
+                    Ok(()) => (),
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+                    Err(e) => return Err(e),
+                }
             }
         }
         Ok(())

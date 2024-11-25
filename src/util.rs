@@ -29,6 +29,7 @@ pub(crate) fn is_empty_dir(p: &Path) -> std::io::Result<bool> {
     match iter.next() {
         None => Ok(true),
         Some(Ok(_)) => Ok(false),
+        Some(Err(e)) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
         Some(Err(e)) => Err(e),
     }
 }
