@@ -333,38 +333,27 @@ pub(crate) struct GetError {
 
 // cf. <https://github.com/awslabs/aws-sdk-rust/issues/1052>
 pub(crate) async fn get_bucket_region(bucket: &str) -> Result<String, GetBucketRegionError> {
-    let url = format!("https://{bucket}.s3.amazonaws.com");
-    let client = reqwest::ClientBuilder::new()
-        .user_agent(concat!(
-            env!("CARGO_PKG_NAME"),
-            "/",
-            env!("CARGO_PKG_VERSION"),
-            " (",
-            env!("CARGO_PKG_REPOSITORY"),
-            ")",
-        ))
-        .build()
-        .map_err(GetBucketRegionError::BuildClient)?;
-    let r = client
-        .head(&url)
-        .send()
-        .await
-        .map_err(|source| GetBucketRegionError::Http { url, source })?;
-    match r.headers().get("x-amz-bucket-region").map(|hv| hv.to_str()) {
-        Some(Ok(region)) => Ok(region.to_owned()),
-        Some(Err(e)) => Err(GetBucketRegionError::BadHeader(e)),
-        None => Err(GetBucketRegionError::NoHeader),
-    }
+    let config = aws_config::from_env()
+        .app_name(
+            aws_config::AppName::new(env!("CARGO_PKG_NAME"))
+                .expect("crate name should be a valid app name"),
+        )
+        .no_credentials()
+        .region("us-east-1")
+        .load()
+        .await;
+    let s3 = Client::new(&config);
+    let res = s3.head_bucket().bucket(bucket).send().await;
+    let bucket_region = match res {
+        Ok(res) => res.bucket_region().map(str::to_owned),
+        Err(err) => err
+            .raw_response()
+            .and_then(|res| res.headers().get("x-amz-bucket-region"))
+            .map(str::to_owned),
+    };
+    bucket_region.ok_or(GetBucketRegionError)
 }
 
-#[derive(Debug, Error)]
-pub(crate) enum GetBucketRegionError {
-    #[error("failed to initialize HTTP client")]
-    BuildClient(#[source] reqwest::Error),
-    #[error("failed to make HEAD request to {url:?}")]
-    Http { url: String, source: reqwest::Error },
-    #[error("S3 response lacked x-amz-bucket-region header")]
-    NoHeader,
-    #[error("S3 response had undecodable x-amz-bucket-region header")]
-    BadHeader(#[source] reqwest::header::ToStrError),
-}
+#[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
+#[error("S3 response did not include bucket region")]
+pub(crate) struct GetBucketRegionError;
