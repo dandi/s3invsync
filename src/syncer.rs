@@ -246,38 +246,7 @@ impl Syncer {
                     fs_err::rename(src, dest)?;
                 }
                 ObjectAction::Download { path } => {
-                    // TODO: Download to a temp file and then move
-                    tracing::trace!("Opening output file");
-                    let outfile = File::create(&path).with_context(|| {
-                        format!("failed to open output file {}", path.display())
-                    })?;
-                    match token
-                        .run_until_cancelled(self.client.download_object(
-                            &item.url(),
-                            item.details.md5_digest(),
-                            &outfile,
-                        ))
-                        .await
-                    {
-                        Some(Ok(())) => {
-                            outfile
-                                .set_modified(item.last_modified_date.into())
-                                .with_context(|| {
-                                    format!("failed to set mtime on {}", path.display())
-                                })?;
-                        }
-                        Some(Err(e)) => {
-                            tracing::error!(error = ?e, "Failed to download object");
-                            if let Err(e2) = self.cleanup_download_path(&path) {
-                                tracing::warn!(error = ?e2, "Failed to clean up download file");
-                            }
-                            return Err(e.into());
-                        }
-                        None => {
-                            tracing::debug!("Download cancelled");
-                            self.cleanup_download_path(&path)?;
-                        }
-                    }
+                    self.download_item(&item, path, token.clone()).await?;
                 }
                 // TODO: Handle cancellation/cleanup around metadata
                 // management:
@@ -289,6 +258,41 @@ impl Syncer {
 
         // TODO: Manage object metadata and old versions
         // TODO: Handle concurrent downloads of the same key
+    }
+
+    async fn download_item(
+        &self,
+        item: &InventoryItem,
+        path: PathBuf,
+        token: CancellationToken,
+    ) -> anyhow::Result<()> {
+        // TODO: Download to a temp file and then move
+        tracing::trace!("Opening output file");
+        let outfile = File::create(&path)
+            .with_context(|| format!("failed to open output file {}", path.display()))?;
+        match token
+            .run_until_cancelled(self.client.download_object(
+                &item.url(),
+                item.details.md5_digest(),
+                &outfile,
+            ))
+            .await
+        {
+            Some(Ok(())) => outfile
+                .set_modified(item.last_modified_date.into())
+                .with_context(|| format!("failed to set mtime on {}", path.display())),
+            Some(Err(e)) => {
+                tracing::error!(error = ?e, "Failed to download object");
+                if let Err(e2) = self.cleanup_download_path(&path) {
+                    tracing::warn!(error = ?e2, "Failed to clean up download file");
+                }
+                Err(e.into())
+            }
+            None => {
+                tracing::debug!("Download cancelled");
+                self.cleanup_download_path(&path).map_err(Into::into)
+            }
+        }
     }
 
     fn cleanup_download_path(&self, dlfile: &Path) -> std::io::Result<()> {
