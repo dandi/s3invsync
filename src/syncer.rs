@@ -116,7 +116,7 @@ impl Syncer {
                     if let Some(item) = r {
                         let this = self.clone();
                         object_dl_pool
-                            .spawn(move |token| async move { this.process_item(item, token).await });
+                            .spawn(move |token| async move { Box::pin(this.process_item(item, token)).await });
                     } else {
                         all_objects_txed = true;
                     }
@@ -187,14 +187,13 @@ impl Syncer {
                     tracing::debug!(path = %latest_path.display(), "Backup path already exists but metadata does not match; renaming current file and downloading correct version");
                     // TODO: Add cancellation & cleanup logic around the rest
                     // of this block:
-                    let guard = self.lock_path(latest_path.clone());
+                    let _guard = self.lock_path(latest_path.clone());
                     self.move_object_file(
                         &latest_path,
                         &parentdir.join(current_md.old_filename(filename)),
                     )?;
                     self.download_item(&item, &parentdir, latest_path, token)
                         .await?;
-                    drop(guard);
                     mdmanager.set(md).await?;
                 }
             } else {
@@ -203,18 +202,16 @@ impl Syncer {
                     tracing::debug!(path = %latest_path.display(), oldpath = %oldpath.display(), "Backup path does not exist but \"old\" path does; will rename");
                     // TODO: Add cancellation & cleanup logic around the rest
                     // of this block:
-                    let guard = self.lock_path(latest_path.clone());
+                    let _guard = self.lock_path(latest_path.clone());
                     self.move_object_file(&oldpath, &latest_path)?;
-                    drop(guard);
                     mdmanager.set(md).await?;
                 } else {
                     tracing::debug!(path = %latest_path.display(), "Backup path does not exist; will download");
                     // TODO: Add cancellation & cleanup logic around the rest
                     // of this block:
-                    let guard = self.lock_path(latest_path.clone());
+                    let _guard = self.lock_path(latest_path.clone());
                     self.download_item(&item, &parentdir, latest_path, token)
                         .await?;
-                    drop(guard);
                     mdmanager.set(md).await?;
                 }
             }
@@ -229,9 +226,8 @@ impl Syncer {
                     tracing::debug!(path = %oldpath.display(), "Backup path does not exist, but \"latest\" file has matching metadata; renaming \"latest\" file");
                     // TODO: Add cancellation & cleanup logic around the rest
                     // of this block:
-                    let guard = self.lock_path(latest_path.clone());
+                    let _guard = self.lock_path(latest_path.clone());
                     self.move_object_file(&latest_path, &oldpath)?;
-                    drop(guard);
                     mdmanager.delete().await?;
                 } else {
                     tracing::debug!(path = %oldpath.display(), "Backup path does not exist; will download");
