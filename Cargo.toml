@@ -17,7 +17,7 @@ publish = false
 [dependencies]
 anyhow = "1.0.93"
 aws-config = { version = "1.5.10", features = ["behavior-version-latest"] }
-aws-sdk-s3 = "1.61.0"
+aws-sdk-s3 = "1.62.0"
 aws-smithy-async = "1.2.1"
 aws-smithy-runtime-api = "1.7.3"
 clap = { version = "4.5.21", default-features = false, features = ["derive", "error-context", "help", "std", "suggestions", "usage", "wrap_help"] }
