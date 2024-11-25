@@ -349,14 +349,16 @@ impl Metadata {
 
 struct MetadataManager<'a> {
     syncer: &'a Syncer,
+    dirpath: &'a Path,
     database_path: PathBuf,
     filename: &'a str,
 }
 
 impl<'a> MetadataManager<'a> {
-    fn new(syncer: &'a Syncer, parentdir: &Path, filename: &'a str) -> Self {
+    fn new(syncer: &'a Syncer, parentdir: &'a Path, filename: &'a str) -> Self {
         MetadataManager {
             syncer,
+            dirpath: parentdir,
             database_path: parentdir.join(METADATA_FILENAME),
             filename,
         }
@@ -381,16 +383,27 @@ impl<'a> MetadataManager<'a> {
     }
 
     fn store(&self, data: BTreeMap<String, Metadata>) -> anyhow::Result<()> {
-        let fp = fs_err::File::create(&self.database_path)?;
-        // TODO: Write to tempfile and then move
-        serde_json::to_writer_pretty(fp, &data)
+        let fp = tempfile::Builder::new()
+            .tempfile_in(self.dirpath)
             .with_context(|| {
                 format!(
-                    "failed to serialize metadata to {}",
+                    "failed to create temporary database file for updating {}",
                     self.database_path.display()
                 )
-            })
-            .map_err(Into::into)
+            })?;
+        serde_json::to_writer_pretty(fp.as_file(), &data).with_context(|| {
+            format!(
+                "failed to serialize metadata to {}",
+                self.database_path.display()
+            )
+        })?;
+        fp.persist(&self.database_path).with_context(|| {
+            format!(
+                "failed to persist temporary database file to {}",
+                self.database_path.display()
+            )
+        })?;
+        Ok(())
     }
 
     async fn get(&self) -> anyhow::Result<Metadata> {
