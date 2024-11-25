@@ -16,13 +16,15 @@ use std::sync::Arc;
 use tokio::sync::mpsc::channel;
 use tokio_util::sync::CancellationToken;
 
-#[derive(Debug)]
+type Guard<'a> = <lockable::LockPool<PathBuf> as lockable::Lockable<PathBuf, ()>>::Guard<'a>;
+
 pub(crate) struct Syncer {
     client: Arc<S3Client>,
     outdir: PathBuf,
     inventory_jobs: NonZeroUsize,
     object_jobs: NonZeroUsize,
     path_filter: Option<regex::Regex>,
+    locks: lockable::LockPool<PathBuf>,
 }
 
 impl Syncer {
@@ -39,6 +41,7 @@ impl Syncer {
             inventory_jobs,
             object_jobs,
             path_filter,
+            locks: lockable::LockPool::new(),
         })
     }
 
@@ -172,13 +175,13 @@ impl Syncer {
         };
         tracing::trace!(path = %parentdir.display(), "Creating output directory");
         fs_err::create_dir_all(&parentdir)?;
-        let mdmanager = MetadataManager::new(&parentdir, filename);
+        let mdmanager = MetadataManager::new(self, &parentdir, filename);
 
         let actions = if item.is_latest {
             tracing::debug!("Object is latest version of key");
             let latest_path = parentdir.join(filename);
             if latest_path.fs_err_try_exists()? {
-                let current_md = mdmanager.get()?;
+                let current_md = mdmanager.get().await?;
                 if md == current_md {
                     tracing::debug!(path = %latest_path.display(), "Backup path already exists and metadata matches; doing nothing");
                     Vec::new()
@@ -220,7 +223,7 @@ impl Syncer {
                 Vec::new()
             } else {
                 let latest_path = parentdir.join(filename);
-                if latest_path.fs_err_try_exists()? && md == mdmanager.get()? {
+                if latest_path.fs_err_try_exists()? && md == mdmanager.get().await? {
                     tracing::debug!(path = %oldpath.display(), "Backup path does not exist, but \"latest\" file has matching metadata; renaming \"latest\" file");
                     vec![
                         ObjectAction::Move {
@@ -278,8 +281,8 @@ impl Syncer {
                 }
                 // TODO: Handle cancellation/cleanup around metadata
                 // management:
-                ObjectAction::SaveMetadata => mdmanager.set(md.clone())?,
-                ObjectAction::DeleteMetadata => mdmanager.delete()?,
+                ObjectAction::SaveMetadata => mdmanager.set(md.clone()).await?,
+                ObjectAction::DeleteMetadata => mdmanager.delete().await?,
             }
         }
         Ok(())
@@ -302,7 +305,12 @@ impl Syncer {
         }
         Ok(())
     }
+
+    async fn lock_path(&self, path: PathBuf) -> Guard<'_> {
+        self.locks.async_lock(path).await
+    }
 }
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum ObjectAction {
     Move { src: PathBuf, dest: PathBuf },
@@ -323,18 +331,23 @@ impl Metadata {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
 struct MetadataManager<'a> {
+    syncer: &'a Syncer,
     database_path: PathBuf,
     filename: &'a str,
 }
 
 impl<'a> MetadataManager<'a> {
-    fn new(parentdir: &Path, filename: &'a str) -> Self {
+    fn new(syncer: &'a Syncer, parentdir: &Path, filename: &'a str) -> Self {
         MetadataManager {
+            syncer,
             database_path: parentdir.join(METADATA_FILENAME),
             filename,
         }
+    }
+
+    async fn lock(&self) -> Guard<'a> {
+        self.syncer.lock_path(self.database_path.clone()).await
     }
 
     fn load(&self) -> anyhow::Result<BTreeMap<String, Metadata>> {
@@ -360,8 +373,12 @@ impl<'a> MetadataManager<'a> {
             .map_err(Into::into)
     }
 
-    fn get(&self) -> anyhow::Result<Metadata> {
-        let Some(md) = self.load()?.remove(self.filename) else {
+    async fn get(&self) -> anyhow::Result<Metadata> {
+        let mut data = {
+            let _guard = self.lock().await;
+            self.load()?
+        };
+        let Some(md) = data.remove(self.filename) else {
             anyhow::bail!(
                 "No entry for {:?} in {}",
                 self.filename,
@@ -371,14 +388,16 @@ impl<'a> MetadataManager<'a> {
         Ok(md)
     }
 
-    fn set(&self, md: Metadata) -> anyhow::Result<()> {
+    async fn set(&self, md: Metadata) -> anyhow::Result<()> {
+        let _guard = self.lock().await;
         let mut data = self.load()?;
         data.insert(self.filename.to_owned(), md);
         self.store(data)?;
         Ok(())
     }
 
-    fn delete(&self) -> anyhow::Result<()> {
+    async fn delete(&self) -> anyhow::Result<()> {
+        let _guard = self.lock().await;
         let mut data = self.load()?;
         if data.remove(self.filename).is_some() {
             self.store(data)?;
