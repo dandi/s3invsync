@@ -186,6 +186,8 @@ impl Syncer {
                     tracing::debug!(path = %latest_path.display(), "Backup path already exists and metadata matches; doing nothing");
                 } else {
                     tracing::debug!(path = %latest_path.display(), "Backup path already exists but metadata does not match; renaming current file and downloading correct version");
+                    // TODO: Add cancellation & cleanup logic around the rest
+                    // of this block:
                     let guard = self.lock_path(latest_path.clone());
                     self.move_object_file(
                         &latest_path,
@@ -199,12 +201,16 @@ impl Syncer {
                 let oldpath = parentdir.join(md.old_filename(filename));
                 if oldpath.fs_err_try_exists()? {
                     tracing::debug!(path = %latest_path.display(), oldpath = %oldpath.display(), "Backup path does not exist but \"old\" path does; will rename");
+                    // TODO: Add cancellation & cleanup logic around the rest
+                    // of this block:
                     let guard = self.lock_path(latest_path.clone());
                     self.move_object_file(&oldpath, &latest_path)?;
                     drop(guard);
                     mdmanager.set(md).await?;
                 } else {
                     tracing::debug!(path = %latest_path.display(), "Backup path does not exist; will download");
+                    // TODO: Add cancellation & cleanup logic around the rest
+                    // of this block:
                     let guard = self.lock_path(latest_path.clone());
                     self.download_item(&item, latest_path, token).await?;
                     drop(guard);
@@ -220,6 +226,8 @@ impl Syncer {
                 let latest_path = parentdir.join(filename);
                 if latest_path.fs_err_try_exists()? && md == mdmanager.get().await? {
                     tracing::debug!(path = %oldpath.display(), "Backup path does not exist, but \"latest\" file has matching metadata; renaming \"latest\" file");
+                    // TODO: Add cancellation & cleanup logic around the rest
+                    // of this block:
                     let guard = self.lock_path(latest_path.clone());
                     self.move_object_file(&latest_path, &oldpath)?;
                     drop(guard);
@@ -232,9 +240,8 @@ impl Syncer {
                     self.download_item(&item, oldpath, token).await?;
                 }
             }
-        };
+        }
         Ok(())
-        // TODO: Handle cancellation/cleanup around metadata management
     }
 
     fn move_object_file(&self, src: &Path, dest: &Path) -> std::io::Result<()> {
