@@ -329,7 +329,11 @@ impl<'a> MetadataManager<'a> {
     }
 
     fn load(&self) -> anyhow::Result<BTreeMap<String, Metadata>> {
-        let content = fs_err::read_to_string(&self.database_path)?;
+        let content = match fs_err::read_to_string(&self.database_path) {
+            Ok(content) => content,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::from("{}"),
+            Err(e) => return Err(e.into()),
+        };
         serde_json::from_str(&content).with_context(|| {
             format!(
                 "failed to deserialize contents of {}",
