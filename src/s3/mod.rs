@@ -49,7 +49,7 @@ impl S3Client {
     }
 
     fn make_dl_tempfile(&self, subpath: &Path, objloc: &S3Location) -> Result<File, TempfileError> {
-        tracing::trace!(url = %objloc, "Creating temporary file for downloading object");
+        tracing::debug!(url = %objloc, "Creating temporary file for downloading object");
         let path = self.tmpdir.path().join(subpath);
         if let Some(p) = path.parent() {
             std::fs::create_dir_all(p).map_err(|source| TempfileError::Mkdir {
@@ -82,6 +82,7 @@ impl S3Client {
         self.get_manifest(ts).await
     }
 
+    #[tracing::instrument(skip_all, fields(day = day.map(|d| d.to_string())))]
     pub(crate) async fn get_latest_manifest_timestamp(
         &self,
         day: Option<Date>,
@@ -118,7 +119,9 @@ impl S3Client {
         })
     }
 
+    #[tracing::instrument(skip_all, fields(%when))]
     pub(crate) async fn get_manifest(&self, when: DateHM) -> Result<CsvManifest, GetManifestError> {
+        tracing::debug!("Fetching manifest.checksum file");
         let checksum_url = self
             .inventory_base
             .join(&format!("{when}/manifest.checksum"));
@@ -138,6 +141,7 @@ impl S3Client {
                 source,
             })?
             .trim();
+        tracing::debug!("Fetching manifest.json file");
         let manifest_url = self.inventory_base.join(&format!("{when}/manifest.json"));
         let mut manifest_file = self.make_dl_tempfile(
             &PathBuf::from(format!("manifests/{when}.json")),
@@ -159,6 +163,7 @@ impl S3Client {
         Ok(manifest)
     }
 
+    #[tracing::instrument(skip_all, fields(key = fspec.key))]
     pub(crate) async fn download_inventory_csv(
         &self,
         fspec: FileSpec,
@@ -190,6 +195,8 @@ impl S3Client {
     ) -> Result<(), DownloadError> {
         tracing::debug!("Downloading object to disk");
         let obj = self.get_object(url).await?;
+        let mut total_received = 0;
+        let object_size = obj.content_length;
         let mut bytestream = obj.body;
         let mut outfile = BufWriter::new(outfile);
         let mut hasher = Md5::new();
@@ -202,6 +209,13 @@ impl S3Client {
                     source,
                 })?
         {
+            total_received += blob.len();
+            tracing::trace!(
+                chunk_size = blob.len(),
+                total_received,
+                object_size,
+                "Received chunk"
+            );
             outfile
                 .write(&blob)
                 .map_err(|source| DownloadError::Write {

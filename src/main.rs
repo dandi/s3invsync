@@ -101,6 +101,7 @@ async fn run(args: Arguments) -> anyhow::Result<()> {
     let region = get_bucket_region(args.inventory_base.bucket()).await?;
     tracing::info!(%bucket, %region, "Found S3 bucket region");
     let client = S3Client::new(region, args.inventory_base).await?;
+    tracing::info!("Fetching manifest ...");
     let manifest = client.get_manifest_for_date(args.date).await?;
     let syncer = Syncer::new(
         client,
@@ -109,6 +110,8 @@ async fn run(args: Arguments) -> anyhow::Result<()> {
         args.object_jobs,
         args.path_filter,
     );
+    tracing::info!("Starting backup ...");
     syncer.run(manifest).await?;
+    tracing::info!("Backup complete");
     Ok(())
 }

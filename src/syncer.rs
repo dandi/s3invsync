@@ -81,15 +81,16 @@ impl Syncer {
                     match r {
                         Some(Ok(())) => (),
                         Some(Err(e)) => {
-                            tracing::error!(error = ?e, "error processing inventory lists");
+                            tracing::error!(error = ?e, "Error processing inventory lists");
                             if errors.is_empty() {
+                                tracing::info!("Shutting down in response to error");
                                 inventory_dl_pool.shutdown();
                                 object_dl_pool.shutdown();
                             }
                             errors.push(e);
                         }
                         None => {
-                            tracing::debug!("Finished processing inventory lists");
+                            tracing::info!("Finished processing inventory lists");
                             inventory_pool_finished = true;
                             object_dl_pool.close();
                         }
@@ -99,15 +100,16 @@ impl Syncer {
                     match r {
                         Some(Ok(())) => (),
                         Some(Err(e)) => {
-                            tracing::error!(error = ?e, "error processing objects");
+                            tracing::error!(error = ?e, "Error processing objects");
                             if errors.is_empty() {
+                                tracing::info!("Shutting down in response to error");
                                 inventory_dl_pool.shutdown();
                                 object_dl_pool.shutdown();
                             }
                             errors.push(e);
                         }
                         None => {
-                            tracing::debug!("Finished processing objects");
+                            tracing::info!("Finished processing objects");
                             object_pool_finished = true;
                         }
                     }
@@ -152,7 +154,7 @@ impl Syncer {
         let etag = match item.details {
             ItemDetails::Present { ref etag, .. } => etag,
             ItemDetails::Deleted => {
-                tracing::debug!("Object is delete marker; not doing anything");
+                tracing::info!("Object is delete marker; not doing anything");
                 return Ok(());
             }
         };
@@ -172,20 +174,20 @@ impl Syncer {
         } else {
             self.outdir.clone()
         };
-        tracing::trace!(path = %parentdir.display(), "Creating output directory");
+        tracing::debug!(path = %parentdir.display(), "Creating output directory");
         fs_err::create_dir_all(&parentdir)?;
         let mdmanager = MetadataManager::new(self, &parentdir, filename);
 
         if item.is_latest {
-            tracing::debug!("Object is latest version of key");
+            tracing::info!("Object is latest version of key");
             let latest_path = parentdir.join(filename);
             let _guard = self.lock_path(latest_path.clone());
             if latest_path.fs_err_try_exists()? {
                 let current_md = mdmanager.get().await?;
                 if md == current_md {
-                    tracing::debug!(path = %latest_path.display(), "Backup path already exists and metadata matches; doing nothing");
+                    tracing::info!(path = %latest_path.display(), "Backup path already exists and metadata matches; doing nothing");
                 } else {
-                    tracing::debug!(path = %latest_path.display(), "Backup path already exists but metadata does not match; renaming current file and downloading correct version");
+                    tracing::info!(path = %latest_path.display(), "Backup path already exists but metadata does not match; renaming current file and downloading correct version");
                     // TODO: Add cancellation & cleanup logic around the rest
                     // of this block:
                     self.move_object_file(
@@ -199,13 +201,13 @@ impl Syncer {
             } else {
                 let oldpath = parentdir.join(md.old_filename(filename));
                 if oldpath.fs_err_try_exists()? {
-                    tracing::debug!(path = %latest_path.display(), oldpath = %oldpath.display(), "Backup path does not exist but \"old\" path does; will rename");
+                    tracing::info!(path = %latest_path.display(), oldpath = %oldpath.display(), "Backup path does not exist but \"old\" path does; will rename");
                     // TODO: Add cancellation & cleanup logic around the rest
                     // of this block:
                     self.move_object_file(&oldpath, &latest_path)?;
                     mdmanager.set(md).await?;
                 } else {
-                    tracing::debug!(path = %latest_path.display(), "Backup path does not exist; will download");
+                    tracing::info!(path = %latest_path.display(), "Backup path does not exist; will download");
                     // TODO: Add cancellation & cleanup logic around the rest
                     // of this block:
                     self.download_item(&item, &parentdir, latest_path, token)
@@ -214,21 +216,21 @@ impl Syncer {
                 }
             }
         } else {
-            tracing::debug!("Object is old version of key");
+            tracing::info!("Object is old version of key");
             let oldpath = parentdir.join(md.old_filename(filename));
             if oldpath.fs_err_try_exists()? {
-                tracing::debug!(path = %oldpath.display(), "Backup path already exists; doing nothing");
+                tracing::info!(path = %oldpath.display(), "Backup path already exists; doing nothing");
             } else {
                 let latest_path = parentdir.join(filename);
                 let guard = self.lock_path(latest_path.clone());
                 if latest_path.fs_err_try_exists()? && md == mdmanager.get().await? {
-                    tracing::debug!(path = %oldpath.display(), "Backup path does not exist, but \"latest\" file has matching metadata; renaming \"latest\" file");
+                    tracing::info!(path = %oldpath.display(), "Backup path does not exist, but \"latest\" file has matching metadata; renaming \"latest\" file");
                     // TODO: Add cancellation & cleanup logic around the rest
                     // of this block:
                     self.move_object_file(&latest_path, &oldpath)?;
                     mdmanager.delete().await?;
                 } else {
-                    tracing::debug!(path = %oldpath.display(), "Backup path does not exist; will download");
+                    tracing::info!(path = %oldpath.display(), "Backup path does not exist; will download");
                     // No need for locking here, as this is an "old" path that
                     // doesn't exist, so no other tasks should be working on
                     // it.
@@ -246,6 +248,7 @@ impl Syncer {
         fs_err::rename(src, dest)
     }
 
+    #[tracing::instrument(skip_all)]
     async fn download_item(
         &self,
         item: &InventoryItem,
@@ -253,7 +256,7 @@ impl Syncer {
         path: PathBuf,
         token: CancellationToken,
     ) -> anyhow::Result<()> {
-        tracing::trace!("Opening temporary output file");
+        tracing::debug!("Opening temporary output file");
         let outfile = tempfile::Builder::new()
             .prefix(".s3invsync.download.")
             .tempfile_in(parentdir)
@@ -269,7 +272,7 @@ impl Syncer {
             .await
         {
             Some(Ok(())) => {
-                tracing::trace!(dest = %path.display(), "Moving temporary output file to destination");
+                tracing::debug!(dest = %path.display(), "Moving temporary output file to destination");
                 let fp = outfile.persist(&path).with_context(|| {
                     format!(
                         "failed to persist temporary output file to {}",
@@ -302,7 +305,7 @@ impl Syncer {
         dlfile: &Path,
     ) -> anyhow::Result<()> {
         // TODO: Synchronize calls to this method?
-        tracing::trace!(path = %dlfile.display(), "Cleaning up unfinished download file");
+        tracing::debug!(path = %dlfile.display(), "Cleaning up unfinished download file");
         outfile.close().with_context(|| {
             format!(
                 "failed to remove temporary download file for {}",
@@ -326,6 +329,7 @@ impl Syncer {
     }
 
     async fn lock_path(&self, path: PathBuf) -> Guard<'_> {
+        tracing::trace!(path = %path.display(), "Acquiring internal lock for path");
         self.locks.async_lock(path).await
     }
 }
@@ -402,6 +406,7 @@ impl<'a> MetadataManager<'a> {
     }
 
     async fn get(&self) -> anyhow::Result<Metadata> {
+        tracing::trace!(file = self.filename, database = %self.database_path.display(), "Fetching object metadata for file from database");
         let mut data = {
             let _guard = self.lock().await;
             self.load()?
@@ -417,6 +422,7 @@ impl<'a> MetadataManager<'a> {
     }
 
     async fn set(&self, md: Metadata) -> anyhow::Result<()> {
+        tracing::trace!(file = self.filename, database = %self.database_path.display(), "Setting object metadata for file in database");
         let _guard = self.lock().await;
         let mut data = self.load()?;
         data.insert(self.filename.to_owned(), md);
@@ -425,6 +431,7 @@ impl<'a> MetadataManager<'a> {
     }
 
     async fn delete(&self) -> anyhow::Result<()> {
+        tracing::trace!(file = self.filename, database = %self.database_path.display(), "Deleting object metadata for file from database");
         let _guard = self.lock().await;
         let mut data = self.load()?;
         if data.remove(self.filename).is_some() {
