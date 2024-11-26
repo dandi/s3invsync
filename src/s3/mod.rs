@@ -49,7 +49,7 @@ impl S3Client {
     }
 
     fn make_dl_tempfile(&self, subpath: &Path, objloc: &S3Location) -> Result<File, TempfileError> {
-        tracing::trace!(url = %objloc, "Creating temporary file for downloading object");
+        tracing::debug!(url = %objloc, "Creating temporary file for downloading object");
         let path = self.tmpdir.path().join(subpath);
         if let Some(p) = path.parent() {
             std::fs::create_dir_all(p).map_err(|source| TempfileError::Mkdir {
