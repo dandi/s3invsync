@@ -17,23 +17,47 @@ use std::path::PathBuf;
 use tracing::Level;
 use tracing_subscriber::{filter::Targets, fmt::time::OffsetTime, prelude::*};
 
+/// Back up an AWS S3 bucket using S3 Inventory files
+///
+/// See <https://github.com/dandi/s3invsync> for more information.
 #[derive(Clone, Debug, Parser)]
 #[command(version)]
 struct Arguments {
+    /// Download objects from the inventory created at the given date.
+    ///
+    /// By default, the most recent inventory is downloaded.
+    ///
+    /// The date must be in the format `YYYY-MM-DD` (in which case the latest
+    /// inventory for the given date is used) or in the format
+    /// `YYYY-MM-DDTHH-MMZ` (to specify a specific inventory).
     #[arg(short, long)]
     date: Option<DateMaybeHM>,
 
+    /// Set the maximum number of inventory list files to download & process at
+    /// once
     #[arg(short = 'I', long, default_value = "20")]
     inventory_jobs: NonZeroUsize,
 
+    /// Set the maximum number of inventory entries to download & process at
+    /// once
     #[arg(short = 'O', long, default_value = "20")]
     object_jobs: NonZeroUsize,
 
-    #[arg(long)]
+    /// Only download objects whose keys match the given regular expression
+    #[arg(long, value_name = "REGEX")]
     path_filter: Option<regex::Regex>,
 
+    /// The location of the manifest files for the S3 inventory to back up
+    ///
+    /// `<inventory-base>` must be of the form `s3://{bucket}/{prefix}/`, where
+    /// `{bucket}` is the destination bucket on which the inventory files are
+    /// stored and `{prefix}/` is the key prefix under which the inventory
+    /// manifest files are located in the bucket (i.e., appending a string of
+    /// the form `YYYY-MM-DDTHH-MMZ/manifest.json` to `{prefix}/` should yield
+    /// a key for a manifest file).
     inventory_base: S3Location,
 
+    /// Directory in which to download the S3 objects
     outdir: PathBuf,
 }
 
