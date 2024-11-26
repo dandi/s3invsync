@@ -73,6 +73,10 @@ Options
 - `-I <INT>`, `--inventory-jobs <INT>` — Specify the maximum number of inventory
   list files to download & process at once [default: 20]
 
+- `-l <level>`, `--log-level <level>` — Set the log level to the given value.
+  Possible values are  "`ERROR`", "`WARN`", "`INFO`", "`DEBUG`", and "`TRACE`"
+  (all case-insensitive).  [default value: `DEBUG`]
+
 - `-O <INT>`, `--object-jobs <INT>` — Specify the maximum number of inventory
   entries to download & process at once [default: 20]
 
