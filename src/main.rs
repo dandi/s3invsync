@@ -38,6 +38,15 @@ struct Arguments {
     #[arg(short = 'I', long, default_value = "20")]
     inventory_jobs: NonZeroUsize,
 
+    /// Set logging level
+    #[arg(
+        short,
+        long,
+        default_value = "DEBUG",
+        value_name = "ERROR|WARN|INFO|DEBUG|TRACE"
+    )]
+    log_level: Level,
+
     /// Set the maximum number of inventory entries to download & process at
     /// once
     #[arg(short = 'O', long, default_value = "20")]
@@ -65,6 +74,7 @@ struct Arguments {
 // <https://docs.rs/tracing-subscriber/latest/tracing_subscriber/fmt/time/struct.OffsetTime.html#method.local_rfc_3339>
 // for an explanation of the main + #[tokio::main]run thing
 fn main() -> anyhow::Result<()> {
+    let args = Arguments::parse();
     let timer =
         OffsetTime::local_rfc_3339().context("failed to determine local timezone offset")?;
     tracing_subscriber::registry()
@@ -76,18 +86,16 @@ fn main() -> anyhow::Result<()> {
         )
         .with(
             Targets::new()
-                .with_target(env!("CARGO_CRATE_NAME"), Level::TRACE)
-                .with_target("aws_config", Level::DEBUG)
-                .with_target("reqwest", Level::TRACE)
-                .with_default(Level::INFO),
+                .with_target(env!("CARGO_CRATE_NAME"), args.log_level)
+                .with_target("aws_config", Level::DEBUG.min(args.log_level))
+                .with_default(Level::INFO.min(args.log_level)),
         )
         .init();
-    run()
+    run(args)
 }
 
 #[tokio::main]
-async fn run() -> anyhow::Result<()> {
-    let args = Arguments::parse();
+async fn run(args: Arguments) -> anyhow::Result<()> {
     let bucket = args.inventory_base.bucket();
     tracing::info!(%bucket, "Determining region for S3 bucket ...");
     let region = get_bucket_region(args.inventory_base.bucket()).await?;
