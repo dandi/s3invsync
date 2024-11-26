@@ -29,9 +29,9 @@ Building & Running
 
 4. Run with `cargo run --release -- <arguments ...>`.
 
-5. If necessary, the actual binary can be found in `target/debug/s3invsync` (or
-   `target/release/s3invsync` if built with `--release`).  It should run on any
-   system with the same OS and architecture as it was built on.
+5. If necessary, the actual binary can be found in `target/release/s3invsync`.
+   It should run on any system with the same OS and architecture as it was
+   built on.
 
 
 Usage
