@@ -81,8 +81,9 @@ impl Syncer {
                     match r {
                         Some(Ok(())) => (),
                         Some(Err(e)) => {
-                            tracing::error!(error = ?e, "error processing inventory lists");
+                            tracing::error!(error = ?e, "Error processing inventory lists");
                             if errors.is_empty() {
+                                tracing::info!("Shutting down in response to error");
                                 inventory_dl_pool.shutdown();
                                 object_dl_pool.shutdown();
                             }
@@ -99,8 +100,9 @@ impl Syncer {
                     match r {
                         Some(Ok(())) => (),
                         Some(Err(e)) => {
-                            tracing::error!(error = ?e, "error processing objects");
+                            tracing::error!(error = ?e, "Error processing objects");
                             if errors.is_empty() {
+                                tracing::info!("Shutting down in response to error");
                                 inventory_dl_pool.shutdown();
                                 object_dl_pool.shutdown();
                             }
@@ -246,6 +248,7 @@ impl Syncer {
         fs_err::rename(src, dest)
     }
 
+    #[tracing::instrument(skip_all)]
     async fn download_item(
         &self,
         item: &InventoryItem,
@@ -326,6 +329,7 @@ impl Syncer {
     }
 
     async fn lock_path(&self, path: PathBuf) -> Guard<'_> {
+        tracing::trace!(path = %path.display(), "Acquiring internal lock for path");
         self.locks.async_lock(path).await
     }
 }
@@ -402,6 +406,7 @@ impl<'a> MetadataManager<'a> {
     }
 
     async fn get(&self) -> anyhow::Result<Metadata> {
+        tracing::trace!(file = self.filename, database = %self.database_path.display(), "Fetching object metadata for file from database");
         let mut data = {
             let _guard = self.lock().await;
             self.load()?
@@ -417,6 +422,7 @@ impl<'a> MetadataManager<'a> {
     }
 
     async fn set(&self, md: Metadata) -> anyhow::Result<()> {
+        tracing::trace!(file = self.filename, database = %self.database_path.display(), "Setting object metadata for file in database");
         let _guard = self.lock().await;
         let mut data = self.load()?;
         data.insert(self.filename.to_owned(), md);
@@ -425,6 +431,7 @@ impl<'a> MetadataManager<'a> {
     }
 
     async fn delete(&self) -> anyhow::Result<()> {
+        tracing::trace!(file = self.filename, database = %self.database_path.display(), "Deleting object metadata for file from database");
         let _guard = self.lock().await;
         let mut data = self.load()?;
         if data.remove(self.filename).is_some() {
