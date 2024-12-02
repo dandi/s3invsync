@@ -17,7 +17,7 @@ publish = false
 [dependencies]
 anyhow = "1.0.93"
 aws-config = { version = "1.5.10", features = ["behavior-version-latest"] }
-aws-sdk-s3 = "1.62.0"
+aws-sdk-s3 = "1.63.0"
 aws-smithy-async = "1.2.1"
 aws-smithy-runtime-api = "1.7.3"
 clap = { version = "4.5.21", default-features = false, features = ["derive", "error-context", "help", "std", "suggestions", "usage", "wrap_help"] }
@@ -37,8 +37,8 @@ thiserror = "2.0.3"
 time = { version = "0.3.36", features = ["macros", "parsing", "serde"] }
 tokio = { version = "1.41.1", features = ["macros", "rt-multi-thread"] }
 tokio-util = { version = "0.7.12", features = ["rt"] }
-tracing = "0.1.40"
-tracing-subscriber = { version = "0.3.18", features = ["local-time", "time"] }
+tracing = "0.1.41"
+tracing-subscriber = { version = "0.3.19", features = ["local-time", "time"] }
 
 [dev-dependencies]
 rstest = { version = "0.23.0", default-features = false }
