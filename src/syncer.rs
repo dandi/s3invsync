@@ -118,7 +118,7 @@ impl Syncer {
                     if let Some(item) = r {
                         let this = self.clone();
                         object_dl_pool
-                            .spawn(move |token| async move { Box::pin(this.process_item(item, token)).await });
+                            .spawn(move |token| this.process_item(item, token));
                     } else {
                         all_objects_txed = true;
                     }
@@ -136,7 +136,7 @@ impl Syncer {
 
     #[tracing::instrument(skip_all, fields(url = %item.url()))]
     async fn process_item(
-        self: &Arc<Self>,
+        self: Arc<Self>,
         item: InventoryItem,
         token: CancellationToken,
     ) -> anyhow::Result<()> {
@@ -176,7 +176,7 @@ impl Syncer {
         };
         tracing::debug!(path = %parentdir.display(), "Creating output directory");
         fs_err::create_dir_all(&parentdir)?;
-        let mdmanager = MetadataManager::new(self, &parentdir, filename);
+        let mdmanager = MetadataManager::new(&self, &parentdir, filename);
 
         if item.is_latest {
             tracing::info!("Object is latest version of key");
