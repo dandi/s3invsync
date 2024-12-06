@@ -42,7 +42,7 @@ impl<T: Send + 'static> LimitedShutdownGroup<T> {
 
     pub(crate) fn spawn<F, Fut>(&self, func: F)
     where
-        F: FnOnce(CancellationToken) -> Fut,
+        F: FnOnce(CancellationToken) -> Fut + Send + 'static,
         Fut: Future<Output = T> + Send + 'static,
     {
         let sender = {
@@ -50,11 +50,15 @@ impl<T: Send + 'static> LimitedShutdownGroup<T> {
             (*s).clone()
         };
         if let Some(sender) = sender {
-            let future = func(self.token.clone());
+            let token = self.token.clone();
             let sem = Arc::clone(&self.semaphore);
             tokio::spawn(async move {
                 if let Ok(_permit) = sem.acquire().await {
-                    let _ = sender.send(future.await).await;
+                    // The evaluation of `func()` is deliberately delayed until
+                    // after a semaphore permit is acquired so that we don't
+                    // waste memory storing futures that won't be run for a
+                    // while.
+                    let _ = sender.send(func(token).await).await;
                 }
             });
         }
