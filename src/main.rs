@@ -21,7 +21,7 @@ use tracing_subscriber::{filter::Targets, fmt::time::OffsetTime, prelude::*};
 ///
 /// See <https://github.com/dandi/s3invsync> for more information.
 #[derive(Clone, Debug, Parser)]
-#[command(version)]
+#[command(version = env!("VERSION_WITH_GIT"))]
 struct Arguments {
     /// Download objects from the inventory created at the given date.
     ///
