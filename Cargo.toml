@@ -43,6 +43,10 @@ tracing-subscriber = { version = "0.3.19", features = ["local-time", "time"] }
 [dev-dependencies]
 rstest = { version = "0.23.0", default-features = false }
 
+[profile.release-debug]
+inherits = "release"
+debug = true
+
 [lints.rust]
 # Lint groups:
 future_incompatible = { level = "deny", priority = -1 }
