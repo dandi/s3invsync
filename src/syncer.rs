@@ -343,13 +343,17 @@ impl Syncer {
     }
 
     fn log_process_info(&self) {
-        let memory = memory_stats::memory_stats().map(|s| s.physical_mem);
+        let (physical_mem, virtual_mem) = match memory_stats::memory_stats() {
+            Some(st) => (Some(st.physical_mem), Some(st.virtual_mem)),
+            None => (None, None),
+        };
         tracing::info!(
             version = env!("CARGO_PKG_VERSION"),
             git_commit = option_env!("GIT_COMMIT"),
             manifest_date = %self.manifest_date,
             elapsed = ?self.start_time.elapsed(),
-            memory,
+            physical_mem,
+            virtual_mem,
             "Process info",
         );
     }
