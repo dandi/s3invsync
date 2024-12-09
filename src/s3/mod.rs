@@ -48,7 +48,11 @@ impl S3Client {
         })
     }
 
-    fn make_dl_tempfile(&self, subpath: &Path, objloc: &S3Location) -> Result<File, TempfileError> {
+    fn make_dl_tempfile(
+        &self,
+        subpath: &Path,
+        objloc: &S3Location,
+    ) -> Result<(File, PathBuf), TempfileError> {
         tracing::debug!(url = %objloc, "Creating temporary file for downloading object");
         let path = self.tmpdir.path().join(subpath);
         if let Some(p) = path.parent() {
@@ -62,7 +66,8 @@ impl S3Client {
             .write(true)
             .truncate(true)
             .create(true)
-            .open(path)
+            .open(&path)
+            .map(|f| (f, path))
             .map_err(|source| TempfileError::Open {
                 url: objloc.to_owned(),
                 source,
@@ -143,7 +148,7 @@ impl S3Client {
             .trim();
         tracing::debug!("Fetching manifest.json file");
         let manifest_url = self.inventory_base.join(&format!("{when}/manifest.json"));
-        let mut manifest_file = self.make_dl_tempfile(
+        let (mut manifest_file, _) = self.make_dl_tempfile(
             &PathBuf::from(format!("manifests/{when}.json")),
             &manifest_url,
         )?;
@@ -173,7 +178,8 @@ impl S3Client {
             .rsplit_once('/')
             .map_or(&*fspec.key, |(_, after)| after);
         let url = self.inventory_base.with_key(&fspec.key);
-        let mut outfile = self.make_dl_tempfile(&PathBuf::from(format!("data/{fname}")), &url)?;
+        let (mut outfile, path) =
+            self.make_dl_tempfile(&PathBuf::from(format!("data/{fname}")), &url)?;
         self.download_object(&url, Some(&fspec.md5_checksum), &outfile)
             .await?;
         outfile
@@ -182,7 +188,7 @@ impl S3Client {
                 url: url.clone(),
                 source,
             })?;
-        Ok(InventoryList::from_gzip_csv_file(url, outfile))
+        Ok(InventoryList::from_gzip_csv_file(path, url, outfile))
     }
 
     #[tracing::instrument(skip_all, fields(url = %url))]
