@@ -6,7 +6,6 @@ static EXPECTED_FILE_SCHEMA: &str = "Bucket, Key, VersionId, IsLatest, IsDeleteM
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 #[serde(try_from = "Manifest")]
 pub(crate) struct CsvManifest {
-    pub(crate) source_bucket: String,
     pub(crate) files: Vec<FileSpec>,
 }
 
@@ -19,10 +18,7 @@ impl TryFrom<Manifest> for CsvManifest {
         } else if value.file_schema != EXPECTED_FILE_SCHEMA {
             Err(ManifestError::Schema(value.file_schema))
         } else {
-            Ok(CsvManifest {
-                source_bucket: value.source_bucket,
-                files: value.files,
-            })
+            Ok(CsvManifest { files: value.files })
         }
     }
 }
