@@ -3,6 +3,7 @@ use crate::consts::METADATA_FILENAME;
 use crate::inventory::{InventoryItem, ItemDetails};
 use crate::manifest::CsvManifest;
 use crate::s3::S3Client;
+use crate::timestamps::DateHM;
 use crate::util::*;
 use anyhow::Context;
 use fs_err::PathExt;
@@ -20,6 +21,8 @@ type Guard<'a> = <lockable::LockPool<PathBuf> as lockable::Lockable<PathBuf, ()>
 pub(crate) struct Syncer {
     client: Arc<S3Client>,
     outdir: PathBuf,
+    manifest_date: DateHM,
+    start_time: std::time::Instant,
     inventory_jobs: NonZeroUsize,
     object_jobs: NonZeroUsize,
     path_filter: Option<regex::Regex>,
@@ -30,6 +33,8 @@ impl Syncer {
     pub(crate) fn new(
         client: S3Client,
         outdir: PathBuf,
+        manifest_date: DateHM,
+        start_time: std::time::Instant,
         inventory_jobs: NonZeroUsize,
         object_jobs: NonZeroUsize,
         path_filter: Option<regex::Regex>,
@@ -37,6 +42,8 @@ impl Syncer {
         Arc::new(Syncer {
             client: Arc::new(client),
             outdir,
+            manifest_date,
+            start_time,
             inventory_jobs,
             object_jobs,
             path_filter,
@@ -86,6 +93,7 @@ impl Syncer {
                                 tracing::info!("Shutting down in response to error");
                                 inventory_dl_pool.shutdown();
                                 object_dl_pool.shutdown();
+                                self.log_process_info();
                             }
                             errors.push(e);
                         }
@@ -105,6 +113,7 @@ impl Syncer {
                                 tracing::info!("Shutting down in response to error");
                                 inventory_dl_pool.shutdown();
                                 object_dl_pool.shutdown();
+                                self.log_process_info();
                             }
                             errors.push(e);
                         }
@@ -331,6 +340,18 @@ impl Syncer {
     async fn lock_path(&self, path: PathBuf) -> Guard<'_> {
         tracing::trace!(path = %path.display(), "Acquiring internal lock for path");
         self.locks.async_lock(path).await
+    }
+
+    fn log_process_info(&self) {
+        let memory = memory_stats::memory_stats().map(|s| s.physical_mem);
+        tracing::info!(
+            version = env!("CARGO_PKG_VERSION"),
+            git_commit = option_env!("GIT_COMMIT"),
+            manifest_date = %self.manifest_date,
+            elapsed = ?self.start_time.elapsed(),
+            memory,
+            "Process info",
+        );
     }
 }
 

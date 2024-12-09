@@ -28,6 +28,7 @@ futures-util = "0.3.31"
 hex = "0.4.3"
 lockable = "0.1.1"
 md-5 = "0.10.6"
+memory-stats = "1.2.0"
 percent-encoding = "2.3.1"
 regex = "1.11.1"
 serde = { version = "1.0.215", features = ["derive"] }

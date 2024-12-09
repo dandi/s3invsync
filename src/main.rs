@@ -96,16 +96,19 @@ fn main() -> anyhow::Result<()> {
 
 #[tokio::main]
 async fn run(args: Arguments) -> anyhow::Result<()> {
+    let start_time = std::time::Instant::now();
     let bucket = args.inventory_base.bucket();
     tracing::info!(%bucket, "Determining region for S3 bucket ...");
     let region = get_bucket_region(args.inventory_base.bucket()).await?;
     tracing::info!(%bucket, %region, "Found S3 bucket region");
     let client = S3Client::new(region, args.inventory_base).await?;
     tracing::info!("Fetching manifest ...");
-    let manifest = client.get_manifest_for_date(args.date).await?;
+    let (manifest, manifest_date) = client.get_manifest_for_date(args.date).await?;
     let syncer = Syncer::new(
         client,
         args.outdir,
+        manifest_date,
+        start_time,
         args.inventory_jobs,
         args.object_jobs,
         args.path_filter,

@@ -77,14 +77,15 @@ impl S3Client {
     pub(crate) async fn get_manifest_for_date(
         &self,
         when: Option<DateMaybeHM>,
-    ) -> Result<CsvManifest, GetManifestError> {
+    ) -> Result<(CsvManifest, DateHM), GetManifestError> {
         let ts = match when {
             None => self.get_latest_manifest_timestamp(None).await?,
             Some(DateMaybeHM::Date(d)) => self.get_latest_manifest_timestamp(Some(d)).await?,
             Some(DateMaybeHM::DateHM(d)) => d,
         };
         tracing::info!(timestamp = %ts, "Getting manifest for timestamp");
-        self.get_manifest(ts).await
+        let manifest = self.get_manifest(ts).await?;
+        Ok((manifest, ts))
     }
 
     #[tracing::instrument(skip_all, fields(day = day.map(|d| d.to_string())))]
