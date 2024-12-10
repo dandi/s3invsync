@@ -249,6 +249,7 @@ impl Syncer {
                 }
             }
         }
+        tracing::info!("Finished processing object");
         Ok(())
     }
 
