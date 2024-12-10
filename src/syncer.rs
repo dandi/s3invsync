@@ -183,7 +183,7 @@ impl Syncer {
         } else {
             self.outdir.clone()
         };
-        tracing::debug!(path = %parentdir.display(), "Creating output directory");
+        tracing::trace!(path = %parentdir.display(), "Creating output directory");
         fs_err::create_dir_all(&parentdir)?;
         let mdmanager = MetadataManager::new(self, &parentdir, filename);
 
@@ -265,7 +265,7 @@ impl Syncer {
         path: PathBuf,
         token: CancellationToken,
     ) -> anyhow::Result<()> {
-        tracing::debug!("Opening temporary output file");
+        tracing::trace!("Opening temporary output file");
         let outfile = tempfile::Builder::new()
             .prefix(".s3invsync.download.")
             .tempfile_in(parentdir)
@@ -281,7 +281,7 @@ impl Syncer {
             .await
         {
             Some(Ok(())) => {
-                tracing::debug!(dest = %path.display(), "Moving temporary output file to destination");
+                tracing::trace!(dest = %path.display(), "Moving temporary output file to destination");
                 let fp = outfile.persist(&path).with_context(|| {
                     format!(
                         "failed to persist temporary output file to {}",
