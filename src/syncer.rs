@@ -1,4 +1,3 @@
-use crate::asyncutil::LimitedShutdownGroup;
 use crate::consts::METADATA_FILENAME;
 use crate::inventory::{InventoryItem, ItemDetails};
 use crate::manifest::CsvManifest;
@@ -7,14 +6,15 @@ use crate::timestamps::DateHM;
 use crate::util::*;
 use anyhow::Context;
 use fs_err::PathExt;
-use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use tokio::sync::mpsc::channel;
+use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
+
+const CHANNEL_SIZE: usize = 65535;
 
 type Guard<'a> = <lockable::LockPool<PathBuf> as lockable::Lockable<PathBuf, ()>>::Guard<'a>;
 
@@ -27,6 +27,7 @@ pub(crate) struct Syncer {
     object_jobs: NonZeroUsize,
     path_filter: Option<regex::Regex>,
     locks: lockable::LockPool<PathBuf>,
+    token: CancellationToken,
 }
 
 impl Syncer {
@@ -48,91 +49,88 @@ impl Syncer {
             object_jobs,
             path_filter,
             locks: lockable::LockPool::new(),
+            token: CancellationToken::new(),
         })
     }
 
     pub(crate) async fn run(self: &Arc<Self>, manifest: CsvManifest) -> Result<(), MultiError> {
-        let mut inventory_dl_pool = LimitedShutdownGroup::new(self.inventory_jobs.get());
-        let mut object_dl_pool = LimitedShutdownGroup::new(self.object_jobs.get());
-        let (obj_sender, mut obj_receiver) = channel(self.inventory_jobs.get());
+        let mut joinset = JoinSet::new();
+        let (fspec_sender, fspec_receiver) = async_channel::bounded(CHANNEL_SIZE);
+        let (obj_sender, obj_receiver) = async_channel::bounded(CHANNEL_SIZE);
 
-        for fspec in manifest.files {
+        for _ in 0..self.inventory_jobs.get() {
             let clnt = self.client.clone();
+            let token = self.token.clone();
+            let recv = fspec_receiver.clone();
             let sender = obj_sender.clone();
-            inventory_dl_pool.spawn(move |token| async move {
-                token
-                    .run_until_cancelled(async move {
-                        let itemlist = clnt.download_inventory_csv(fspec).await?;
-                        for item in itemlist {
-                            if sender.send(item?).await.is_err() {
-                                // Assume we're shutting down
-                                return Ok(());
+            joinset.spawn(async move {
+                while let Ok(fspec) = recv.recv().await {
+                    let clnt = clnt.clone();
+                    let sender = sender.clone();
+                    let r = token
+                        .run_until_cancelled(async move {
+                            let itemlist = clnt.download_inventory_csv(fspec).await?;
+                            for item in itemlist {
+                                if sender.send(item?).await.is_err() {
+                                    // Assume we're shutting down
+                                    return Ok(());
+                                }
                             }
-                        }
-                        Ok(())
-                    })
-                    .await
-                    .unwrap_or(Ok(()))
+                            Ok(())
+                        })
+                        .await;
+                    match r {
+                        Some(Ok(())) => (),
+                        Some(Err(e)) => return Err(e),
+                        None => return Ok(()),
+                    }
+                }
+                Ok(())
             });
         }
-        inventory_dl_pool.close();
         drop(obj_sender);
+        drop(fspec_receiver);
+
+        joinset.spawn(async move {
+            for fspec in manifest.files {
+                if fspec_sender.send(fspec).await.is_err() {
+                    return Ok(());
+                }
+            }
+            Ok(())
+        });
+
+        for _ in 0..self.object_jobs.get() {
+            let this = self.clone();
+            let token = self.token.clone();
+            let recv = obj_receiver.clone();
+            joinset.spawn(async move {
+                while let Ok(item) = recv.recv().await {
+                    if token.is_cancelled() {
+                        return Ok(());
+                    }
+                    Box::pin(this.process_item(item, token.clone())).await?;
+                }
+                Ok(())
+            });
+        }
 
         let mut errors = Vec::new();
-        let mut inventory_pool_finished = false;
-        let mut object_pool_finished = false;
-        let mut all_objects_txed = false;
-        loop {
-            tokio::select! {
-                r = inventory_dl_pool.next(), if !inventory_pool_finished => {
-                    match r {
-                        Some(Ok(())) => (),
-                        Some(Err(e)) => {
-                            tracing::error!(error = ?e, "Error processing inventory lists");
-                            if errors.is_empty() {
-                                tracing::info!("Shutting down in response to error");
-                                inventory_dl_pool.shutdown();
-                                object_dl_pool.shutdown();
-                                self.log_process_info();
-                            }
-                            errors.push(e);
-                        }
-                        None => {
-                            tracing::info!("Finished processing inventory lists");
-                            inventory_pool_finished = true;
-                            object_dl_pool.close();
-                        }
+        while let Some(r) = joinset.join_next().await {
+            match r {
+                Ok(Ok(())) => (),
+                Ok(Err(e)) => {
+                    tracing::error!(error = ?e, "Error occurred");
+                    if errors.is_empty() {
+                        tracing::info!("Shutting down in response to error");
+                        self.token.cancel();
+                        obj_receiver.close();
+                        self.log_process_info();
                     }
+                    errors.push(e);
                 }
-                r = object_dl_pool.next(), if !object_pool_finished => {
-                    match r {
-                        Some(Ok(())) => (),
-                        Some(Err(e)) => {
-                            tracing::error!(error = ?e, "Error processing objects");
-                            if errors.is_empty() {
-                                tracing::info!("Shutting down in response to error");
-                                inventory_dl_pool.shutdown();
-                                object_dl_pool.shutdown();
-                                self.log_process_info();
-                            }
-                            errors.push(e);
-                        }
-                        None => {
-                            tracing::info!("Finished processing objects");
-                            object_pool_finished = true;
-                        }
-                    }
-                }
-                r = obj_receiver.recv(), if !all_objects_txed => {
-                    if let Some(item) = r {
-                        let this = self.clone();
-                        object_dl_pool
-                            .spawn(move |token| async move { Box::pin(this.process_item(item, token)).await });
-                    } else {
-                        all_objects_txed = true;
-                    }
-                }
-                else => break,
+                Err(e) if e.is_panic() => std::panic::resume_unwind(e.into_panic()),
+                Err(_) => (),
             }
         }
 
@@ -149,9 +147,6 @@ impl Syncer {
         item: InventoryItem,
         token: CancellationToken,
     ) -> anyhow::Result<()> {
-        if token.is_cancelled() {
-            return Ok(());
-        }
         if let Some(ref rgx) = self.path_filter {
             if !rgx.is_match(&item.key) {
                 tracing::info!("Object key does not match --path-filter; skipping");
