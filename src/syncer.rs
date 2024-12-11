@@ -336,6 +336,7 @@ impl Syncer {
         }
     }
 
+    #[tracing::instrument(skip_all, fields(path = %dlfile.display()))]
     fn cleanup_download_path(
         &self,
         item: &InventoryItem,
@@ -343,7 +344,7 @@ impl Syncer {
         dlfile: &Path,
     ) -> anyhow::Result<()> {
         // TODO: Synchronize calls to this method?
-        tracing::debug!(path = %dlfile.display(), "Cleaning up unfinished download file");
+        tracing::debug!("Cleaning up unfinished download file");
         outfile.close().with_context(|| {
             format!(
                 "failed to remove temporary download file for {}",
@@ -363,6 +364,7 @@ impl Syncer {
                 }
             }
         }
+        tracing::debug!("Finished cleaning up unfinished download file");
         Ok(())
     }
 
