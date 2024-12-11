@@ -206,11 +206,14 @@ impl Syncer {
                         &latest_path,
                         &parentdir.join(current_md.old_filename(filename)),
                     )?;
-                    self.download_item(&item, &parentdir, latest_path, token)
-                        .await?;
-                    mdmanager.set(md).await.with_context(|| {
-                        format!("failed to set local metadata for {}", item.url())
-                    })?;
+                    if self
+                        .download_item(&item, &parentdir, latest_path, token)
+                        .await?
+                    {
+                        mdmanager.set(md).await.with_context(|| {
+                            format!("failed to set local metadata for {}", item.url())
+                        })?;
+                    }
                 }
             } else {
                 let oldpath = parentdir.join(md.old_filename(filename));
@@ -226,11 +229,14 @@ impl Syncer {
                     tracing::info!(path = %latest_path.display(), "Backup path does not exist; will download");
                     // TODO: Add cancellation & cleanup logic around the rest
                     // of this block:
-                    self.download_item(&item, &parentdir, latest_path, token)
-                        .await?;
-                    mdmanager.set(md).await.with_context(|| {
-                        format!("failed to set local metadata for {}", item.url())
-                    })?;
+                    if self
+                        .download_item(&item, &parentdir, latest_path, token)
+                        .await?
+                    {
+                        mdmanager.set(md).await.with_context(|| {
+                            format!("failed to set local metadata for {}", item.url())
+                        })?;
+                    }
                 }
             }
         } else {
@@ -287,7 +293,7 @@ impl Syncer {
         parentdir: &Path,
         path: PathBuf,
         token: CancellationToken,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<bool> {
         tracing::trace!("Opening temporary output file");
         let outfile = tempfile::Builder::new()
             .prefix(".s3invsync.download.")
@@ -313,7 +319,7 @@ impl Syncer {
                 })?;
                 fp.set_modified(item.last_modified_date.into())
                     .with_context(|| format!("failed to set mtime on {}", path.display()))?;
-                Ok(())
+                Ok(true)
             }
             Some(Err(e)) => {
                 tracing::error!(error = ?e, "Failed to download object");
@@ -324,8 +330,8 @@ impl Syncer {
             }
             None => {
                 tracing::debug!("Download cancelled");
-                self.cleanup_download_path(item, outfile, &path)
-                    .map_err(Into::into)
+                self.cleanup_download_path(item, outfile, &path)?;
+                Ok(false)
             }
         }
     }
