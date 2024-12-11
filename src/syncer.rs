@@ -192,7 +192,10 @@ impl Syncer {
             let latest_path = parentdir.join(filename);
             let _guard = self.lock_path(latest_path.clone());
             if latest_path.fs_err_try_exists()? {
-                let current_md = mdmanager.get().await?;
+                let current_md = mdmanager
+                    .get()
+                    .await
+                    .with_context(|| format!("failed to get local metadata for {}", item.url()))?;
                 if md == current_md {
                     tracing::info!(path = %latest_path.display(), "Backup path already exists and metadata matches; doing nothing");
                 } else {
@@ -205,7 +208,9 @@ impl Syncer {
                     )?;
                     self.download_item(&item, &parentdir, latest_path, token)
                         .await?;
-                    mdmanager.set(md).await?;
+                    mdmanager.set(md).await.with_context(|| {
+                        format!("failed to set local metadata for {}", item.url())
+                    })?;
                 }
             } else {
                 let oldpath = parentdir.join(md.old_filename(filename));
@@ -214,14 +219,18 @@ impl Syncer {
                     // TODO: Add cancellation & cleanup logic around the rest
                     // of this block:
                     self.move_object_file(&oldpath, &latest_path)?;
-                    mdmanager.set(md).await?;
+                    mdmanager.set(md).await.with_context(|| {
+                        format!("failed to set local metadata for {}", item.url())
+                    })?;
                 } else {
                     tracing::info!(path = %latest_path.display(), "Backup path does not exist; will download");
                     // TODO: Add cancellation & cleanup logic around the rest
                     // of this block:
                     self.download_item(&item, &parentdir, latest_path, token)
                         .await?;
-                    mdmanager.set(md).await?;
+                    mdmanager.set(md).await.with_context(|| {
+                        format!("failed to set local metadata for {}", item.url())
+                    })?;
                 }
             }
         } else {
@@ -232,12 +241,25 @@ impl Syncer {
             } else {
                 let latest_path = parentdir.join(filename);
                 let guard = self.lock_path(latest_path.clone());
-                if latest_path.fs_err_try_exists()? && md == mdmanager.get().await? {
+                if latest_path.fs_err_try_exists()?
+                    && md
+                        == mdmanager.get().await.with_context(|| {
+                            format!(
+                                "failed to get local metadata for latest version of {}",
+                                item.url()
+                            )
+                        })?
+                {
                     tracing::info!(path = %oldpath.display(), "Backup path does not exist, but \"latest\" file has matching metadata; renaming \"latest\" file");
                     // TODO: Add cancellation & cleanup logic around the rest
                     // of this block:
                     self.move_object_file(&latest_path, &oldpath)?;
-                    mdmanager.delete().await?;
+                    mdmanager.delete().await.with_context(|| {
+                        format!(
+                            "failed to delete local metadata for latest version of {}",
+                            item.url()
+                        )
+                    })?;
                 } else {
                     tracing::info!(path = %oldpath.display(), "Backup path does not exist; will download");
                     // No need for locking here, as this is an "old" path that
