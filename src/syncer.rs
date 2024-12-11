@@ -351,18 +351,17 @@ impl Syncer {
                 item.url()
             )
         })?;
-        let p = dlfile.parent();
+        let mut p = dlfile.parent();
         while let Some(pp) = p {
-            if pp == self.outdir {
+            if pp == self.outdir || !is_empty_dir(pp)? {
                 break;
             }
-            if is_empty_dir(pp)? {
-                match fs_err::remove_dir(pp) {
-                    Ok(()) => (),
-                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-                    Err(e) => return Err(e.into()),
-                }
+            match fs_err::remove_dir(pp) {
+                Ok(()) => (),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+                Err(e) => return Err(e.into()),
             }
+            p = pp.parent();
         }
         tracing::debug!("Finished cleaning up unfinished download file");
         Ok(())
