@@ -351,17 +351,8 @@ impl Syncer {
                 item.url()
             )
         })?;
-        let mut p = dlfile.parent();
-        while let Some(pp) = p {
-            if pp == self.outdir || !is_empty_dir(pp)? {
-                break;
-            }
-            match fs_err::remove_dir(pp) {
-                Ok(()) => (),
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-                Err(e) => return Err(e.into()),
-            }
-            p = pp.parent();
+        if let Some(dirpath) = dlfile.parent() {
+            rmdir_to_root(dirpath, &self.outdir)?;
         }
         tracing::debug!("Finished cleaning up unfinished download file");
         Ok(())
