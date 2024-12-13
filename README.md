@@ -82,3 +82,6 @@ Options
 
 - `--path-filter <REGEX>` — Only download objects whose keys match the given
   [regular expression](https://docs.rs/regex/latest/regex/#syntax)
+
+- `--trace-progress` — Emit download progress information at the TRACE level.
+  This is off by default because it can make for some very noisy logs.

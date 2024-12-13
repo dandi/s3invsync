@@ -22,6 +22,7 @@ use thiserror::Error;
 pub(crate) struct S3Client {
     inner: Client,
     inventory_base: S3Location,
+    trace_progress: bool,
     tmpdir: tempfile::TempDir,
 }
 
@@ -29,6 +30,7 @@ impl S3Client {
     pub(crate) async fn new(
         region: String,
         inventory_base: S3Location,
+        trace_progress: bool,
     ) -> Result<S3Client, ClientBuildError> {
         let tmpdir = tempfile::tempdir().map_err(ClientBuildError::Tempdir)?;
         let config = aws_config::from_env()
@@ -44,6 +46,7 @@ impl S3Client {
         Ok(S3Client {
             inner,
             inventory_base,
+            trace_progress,
             tmpdir,
         })
     }
@@ -217,12 +220,14 @@ impl S3Client {
                 })?
         {
             total_received += blob.len();
-            tracing::trace!(
-                chunk_size = blob.len(),
-                total_received,
-                object_size,
-                "Received chunk"
-            );
+            if self.trace_progress {
+                tracing::trace!(
+                    chunk_size = blob.len(),
+                    total_received,
+                    object_size,
+                    "Received chunk"
+                );
+            }
             outfile
                 .write(&blob)
                 .map_err(|source| DownloadError::Write {
