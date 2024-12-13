@@ -56,6 +56,10 @@ struct Arguments {
     #[arg(long, value_name = "REGEX")]
     path_filter: Option<regex::Regex>,
 
+    /// Emit download progress information at TRACE level
+    #[arg(long)]
+    trace_progress: bool,
+
     /// The location of the manifest files for the S3 inventory to back up
     ///
     /// `<inventory-base>` must be of the form `s3://{bucket}/{prefix}/`, where
@@ -101,7 +105,7 @@ async fn run(args: Arguments) -> anyhow::Result<()> {
     tracing::info!(%bucket, "Determining region for S3 bucket ...");
     let region = get_bucket_region(args.inventory_base.bucket()).await?;
     tracing::info!(%bucket, %region, "Found S3 bucket region");
-    let client = S3Client::new(region, args.inventory_base).await?;
+    let client = S3Client::new(region, args.inventory_base, args.trace_progress).await?;
     tracing::info!("Fetching manifest ...");
     let (manifest, manifest_date) = client.get_manifest_for_date(args.date).await?;
     let syncer = Syncer::new(
