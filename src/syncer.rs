@@ -429,6 +429,7 @@ impl<'a> MetadataManager<'a> {
 
     fn store(&self, data: BTreeMap<String, Metadata>) -> anyhow::Result<()> {
         let fp = tempfile::Builder::new()
+            .prefix(".s3invsync.versions.")
             .tempfile_in(self.dirpath)
             .with_context(|| {
                 format!(
