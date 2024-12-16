@@ -185,7 +185,7 @@ impl Syncer {
         if item.is_latest {
             tracing::info!("Object is latest version of key");
             let latest_path = parentdir.join(filename);
-            let _guard = self.lock_path(latest_path.clone());
+            let _guard = self.lock_path(latest_path.clone()).await;
             if latest_path.fs_err_try_exists()? {
                 let current_md = mdmanager
                     .get()
@@ -241,7 +241,7 @@ impl Syncer {
                 tracing::info!(path = %oldpath.display(), "Backup path already exists; doing nothing");
             } else {
                 let latest_path = parentdir.join(filename);
-                let guard = self.lock_path(latest_path.clone());
+                let guard = self.lock_path(latest_path.clone()).await;
                 if latest_path.fs_err_try_exists()?
                     && md
                         == mdmanager.get().await.with_context(|| {
