@@ -317,11 +317,12 @@ impl Syncer {
                 Ok(true)
             }
             Some(Err(e)) => {
+                let e = anyhow::Error::from(e);
                 tracing::error!(error = ?e, "Failed to download object");
                 if let Err(e2) = self.cleanup_download_path(item, outfile, &path) {
                     tracing::warn!(error = ?e2, "Failed to clean up download path");
                 }
-                Err(e.into())
+                Err(e)
             }
             None => {
                 tracing::debug!("Download cancelled");
