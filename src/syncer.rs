@@ -5,9 +5,9 @@ use crate::s3::S3Client;
 use crate::timestamps::DateHM;
 use crate::util::*;
 use anyhow::Context;
-use fs_err::PathExt;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use std::io::ErrorKind;
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -54,6 +54,8 @@ impl Syncer {
     }
 
     pub(crate) async fn run(self: &Arc<Self>, manifest: CsvManifest) -> Result<(), MultiError> {
+        tracing::trace!(path = %self.outdir.display(), "Creating root output directory");
+        fs_err::create_dir_all(&self.outdir).map_err(|e| MultiError(vec![e.into()]))?;
         let mut joinset = JoinSet::new();
         let (fspec_sender, fspec_receiver) = async_channel::bounded(CHANNEL_SIZE);
         let (obj_sender, obj_receiver) = async_channel::bounded(CHANNEL_SIZE);
@@ -164,19 +166,20 @@ impl Syncer {
 
         let (dirname, filename) = item.key.split();
         let parentdir = if let Some(p) = dirname {
-            self.outdir.join(p)
+            let pd = self.outdir.join(p);
+            tracing::trace!(path = %pd.display(), "Creating output directory");
+            force_create_dir_all(&self.outdir, p.split('/'))?;
+            pd
         } else {
             self.outdir.clone()
         };
-        tracing::trace!(path = %parentdir.display(), "Creating output directory");
-        fs_err::create_dir_all(&parentdir)?;
         let mdmanager = MetadataManager::new(self, &parentdir, filename);
 
         if item.is_latest {
             tracing::info!("Object is latest version of key");
             let latest_path = parentdir.join(filename);
             let _guard = self.lock_path(latest_path.clone()).await;
-            if latest_path.fs_err_try_exists()? {
+            if ensure_file(&latest_path).await? {
                 let current_md = mdmanager
                     .get()
                     .await
@@ -199,7 +202,7 @@ impl Syncer {
                 }
             } else {
                 let oldpath = parentdir.join(md.old_filename(filename));
-                if oldpath.fs_err_try_exists()? {
+                if ensure_file(&oldpath).await? {
                     tracing::info!(path = %latest_path.display(), oldpath = %oldpath.display(), "Backup path does not exist but \"old\" path does; will rename");
                     // TODO: Add cancellation & cleanup logic around the rest
                     // of this block:
@@ -221,12 +224,12 @@ impl Syncer {
         } else {
             tracing::info!("Object is old version of key");
             let oldpath = parentdir.join(md.old_filename(filename));
-            if oldpath.fs_err_try_exists()? {
+            if ensure_file(&oldpath).await? {
                 tracing::info!(path = %oldpath.display(), "Backup path already exists; doing nothing");
             } else {
                 let latest_path = parentdir.join(filename);
                 let guard = self.lock_path(latest_path.clone()).await;
-                if latest_path.fs_err_try_exists()?
+                if ensure_file(&latest_path).await?
                     && md
                         == mdmanager.get().await.with_context(|| {
                             format!(
@@ -395,7 +398,7 @@ impl<'a> MetadataManager<'a> {
     fn load(&self) -> anyhow::Result<BTreeMap<String, Metadata>> {
         let content = match fs_err::read_to_string(&self.database_path) {
             Ok(content) => content,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::from("{}"),
+            Err(e) if e.kind() == ErrorKind::NotFound => String::from("{}"),
             Err(e) => return Err(e.into()),
         };
         serde_json::from_str(&content).with_context(|| {

@@ -1,5 +1,6 @@
 use std::fmt;
-use std::path::Path;
+use std::io::ErrorKind;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug)]
 pub(crate) struct MultiError(pub(crate) Vec<anyhow::Error>);
@@ -27,7 +28,7 @@ pub(crate) fn is_empty_dir(p: &Path) -> std::io::Result<bool> {
     match iter.next() {
         None => Ok(true),
         Some(Ok(_)) => Ok(false),
-        Some(Err(e)) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Some(Err(e)) if e.kind() == ErrorKind::NotFound => Ok(false),
         Some(Err(e)) => Err(e),
     }
 }
@@ -42,10 +43,64 @@ pub(crate) fn rmdir_to_root(topdir: &Path, rootdir: &Path) -> std::io::Result<()
         }
         match fs_err::remove_dir(pp) {
             Ok(()) => (),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(e) if e.kind() == ErrorKind::NotFound => return Ok(()),
             Err(e) => return Err(e),
         }
         p = pp.parent();
+    }
+    Ok(())
+}
+
+/// If `p` is a directory or a symlink, delete it.  Returns `true` if `p`
+/// exists afterwards.
+pub(crate) async fn ensure_file(p: &Path) -> anyhow::Result<bool> {
+    match fs_err::symlink_metadata(p) {
+        Ok(md) if md.is_dir() => {
+            tracing::debug!(path = %p.display(), "Download path is an unexpected directory; deleting");
+            fs_err::tokio::remove_dir_all(p).await?;
+            Ok(false)
+        }
+        Ok(md) if md.is_symlink() => {
+            tracing::debug!(path = %p.display(), "Download path is an unexpected symlink; deleting");
+            fs_err::tokio::remove_file(p).await?;
+            Ok(false)
+        }
+        Ok(md) if md.is_file() => Ok(true),
+        Ok(md) => anyhow::bail!(
+            "Path {} has unexpected file type {:?}",
+            p.display(),
+            md.file_type()
+        ),
+        Err(e) if e.kind() == ErrorKind::NotFound => Ok(false),
+        Err(e) => Err(e.into()),
+    }
+}
+
+pub(crate) fn force_create_dir_all<I: IntoIterator<Item: AsRef<Path>>>(
+    root: &Path,
+    dirs: I,
+) -> std::io::Result<()> {
+    let mut p = PathBuf::from(root);
+    for d in dirs {
+        p.push(d);
+        match fs_err::symlink_metadata(&p) {
+            Ok(md) => {
+                if !md.is_dir() {
+                    tracing::debug!(path = %p.display(), "Intermediate path in directory structure is an unexpected file; deleting");
+                    fs_err::remove_file(&p)?;
+                    fs_err::create_dir(&p)?;
+                }
+            }
+            Err(e) if e.kind() == ErrorKind::NotFound => {
+                match fs_err::create_dir(&p) {
+                    Ok(()) => (),
+                    // Race condition:
+                    Err(e) if e.kind() == ErrorKind::AlreadyExists => (),
+                    Err(e) => return Err(e),
+                }
+            }
+            Err(e) => return Err(e),
+        }
     }
     Ok(())
 }
