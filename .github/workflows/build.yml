@@ -1,0 +1,96 @@
+name: Build Binaries
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    # Run whenever the PR is pushed to, receives a label, or is created with
+    # one or more labels:
+    types: [synchronize, labeled]
+  release:
+    types: [published]
+
+# Prevent the workflow from running multiple jobs at once when a PR is created
+# with multiple labels:
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.head.label || github.event_name }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: build (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            os: macos-13
+            os-name: macos
+            architecture: arm64
+            suffix: ""
+            use-cross: true
+          - target: x86_64-apple-darwin
+            os: macos-13
+            os-name: macos
+            architecture: x86_64
+            suffix: ""
+            use-cross: false
+          - target: x86_64-pc-windows-msvc
+            os: windows-2019
+            os-name: windows
+            architecture: x86_64
+            suffix: ".exe"
+            use-cross: false
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-20.04
+            os-name: linux
+            architecture: x86_64
+            suffix: ""
+            use-cross: false
+    if: >
+      github.event_name != 'pull_request'
+        || contains(github.event.pull_request.labels.*.name, 'buildme')
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: stable
+          targets: ${{ matrix.target }}
+
+      - name: Activate cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install cross
+        if: matrix.use-cross
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cross
+
+      - name: Build
+        if: "!matrix.use-cross"
+        run: cargo build --release --target ${{ matrix.target }} --verbose
+
+      - name: Build w/cross
+        if: matrix.use-cross
+        run: cross build --release --target ${{ matrix.target }} --verbose
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: s3invsync-${{ matrix.os-name }}-${{ matrix.architecture }}
+          path: target/${{ matrix.target }}/release/s3invsync${{ matrix.suffix }}
+
+      - name: Upload release asset
+        if: github.event_name == 'release'
+        run: |
+          mv "$target_path" "$asset_name"
+          gh release upload "$tag" "$asset_name"
+        env:
+          tag: ${{ github.event.release.tag_name }}
+          target_path: target/${{ matrix.target }}/release/s3invsync${{ matrix.suffix }}
+          asset_name: s3invsync-${{ matrix.os-name }}-${{ matrix.architecture }}
