@@ -23,6 +23,14 @@ impl fmt::Display for MultiError {
 
 impl std::error::Error for MultiError {}
 
+fn suppress_error_kind(r: std::io::Result<()>, kind: ErrorKind) -> std::io::Result<()> {
+    if matches!(r, Err(ref e) if e.kind() == kind) {
+        Ok(())
+    } else {
+        r
+    }
+}
+
 pub(crate) fn is_empty_dir(p: &Path) -> std::io::Result<bool> {
     let mut iter = fs_err::read_dir(p)?;
     match iter.next() {
@@ -36,17 +44,11 @@ pub(crate) fn is_empty_dir(p: &Path) -> std::io::Result<bool> {
 /// Deletes the directory `topdir` and all of its parent directories up to —
 /// but not including — `rootdir`, so long as each is empty.
 pub(crate) fn rmdir_to_root(topdir: &Path, rootdir: &Path) -> std::io::Result<()> {
-    let mut p = Some(topdir);
-    while let Some(pp) = p {
-        if pp == rootdir || !is_empty_dir(pp)? {
+    for p in topdir.ancestors() {
+        if p == rootdir || !is_empty_dir(p)? {
             break;
         }
-        match fs_err::remove_dir(pp) {
-            Ok(()) => (),
-            Err(e) if e.kind() == ErrorKind::NotFound => return Ok(()),
-            Err(e) => return Err(e),
-        }
-        p = pp.parent();
+        suppress_error_kind(fs_err::remove_dir(p), ErrorKind::NotFound)?;
     }
     Ok(())
 }
@@ -87,17 +89,16 @@ pub(crate) fn force_create_dir_all<I: IntoIterator<Item: AsRef<Path>>>(
             Ok(md) => {
                 if !md.is_dir() {
                     tracing::debug!(path = %p.display(), "Intermediate path in directory structure is an unexpected file; deleting");
-                    fs_err::remove_file(&p)?;
-                    fs_err::create_dir(&p)?;
+                    // Work around races when multiple tasks create the same
+                    // directory path at once:
+                    suppress_error_kind(fs_err::remove_file(&p), ErrorKind::NotFound)?;
+                    suppress_error_kind(fs_err::create_dir(&p), ErrorKind::AlreadyExists)?;
                 }
             }
             Err(e) if e.kind() == ErrorKind::NotFound => {
-                match fs_err::create_dir(&p) {
-                    Ok(()) => (),
-                    // Race condition:
-                    Err(e) if e.kind() == ErrorKind::AlreadyExists => (),
-                    Err(e) => return Err(e),
-                }
+                // Work around races when multiple tasks create the same
+                // directory path at once:
+                suppress_error_kind(fs_err::create_dir(&p), ErrorKind::AlreadyExists)?;
             }
             Err(e) => return Err(e),
         }
