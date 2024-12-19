@@ -102,14 +102,13 @@ impl Syncer {
 
         for _ in 0..self.object_jobs.get() {
             let this = self.clone();
-            let token = self.token.clone();
             let recv = obj_receiver.clone();
             joinset.spawn(async move {
                 while let Ok(item) = recv.recv().await {
-                    if token.is_cancelled() {
+                    if this.token.is_cancelled() {
                         return Ok(());
                     }
-                    Box::pin(this.process_item(item, token.clone())).await?;
+                    Box::pin(this.process_item(item)).await?;
                 }
                 Ok(())
             });
@@ -142,11 +141,7 @@ impl Syncer {
     }
 
     #[tracing::instrument(skip_all, fields(url = %item.url()))]
-    async fn process_item(
-        self: &Arc<Self>,
-        item: InventoryItem,
-        token: CancellationToken,
-    ) -> anyhow::Result<()> {
+    async fn process_item(self: &Arc<Self>, item: InventoryItem) -> anyhow::Result<()> {
         if let Some(ref rgx) = self.path_filter {
             if !rgx.is_match(&item.key) {
                 tracing::info!("Object key does not match --path-filter; skipping");
@@ -201,10 +196,7 @@ impl Syncer {
                         &latest_path,
                         &parentdir.join(current_md.old_filename(filename)),
                     )?;
-                    if self
-                        .download_item(&item, &parentdir, latest_path, token)
-                        .await?
-                    {
+                    if self.download_item(&item, &parentdir, latest_path).await? {
                         mdmanager.set(md).await.with_context(|| {
                             format!("failed to set local metadata for {}", item.url())
                         })?;
@@ -224,10 +216,7 @@ impl Syncer {
                     tracing::info!(path = %latest_path.display(), "Backup path does not exist; will download");
                     // TODO: Add cancellation & cleanup logic around the rest
                     // of this block:
-                    if self
-                        .download_item(&item, &parentdir, latest_path, token)
-                        .await?
-                    {
+                    if self.download_item(&item, &parentdir, latest_path).await? {
                         mdmanager.set(md).await.with_context(|| {
                             format!("failed to set local metadata for {}", item.url())
                         })?;
@@ -267,8 +256,7 @@ impl Syncer {
                     // doesn't exist, so no other tasks should be working on
                     // it.
                     drop(guard);
-                    self.download_item(&item, &parentdir, oldpath, token)
-                        .await?;
+                    self.download_item(&item, &parentdir, oldpath).await?;
                 }
             }
         }
@@ -287,7 +275,6 @@ impl Syncer {
         item: &InventoryItem,
         parentdir: &Path,
         path: PathBuf,
-        token: CancellationToken,
     ) -> anyhow::Result<bool> {
         tracing::trace!("Opening temporary output file");
         let outfile = tempfile::Builder::new()
@@ -296,7 +283,8 @@ impl Syncer {
             .with_context(|| {
                 format!("failed to create temporary output file for {}", item.url())
             })?;
-        match token
+        match self
+            .token
             .run_until_cancelled(self.client.download_object(
                 &item.url(),
                 item.details.md5_digest(),
