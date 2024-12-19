@@ -97,7 +97,9 @@ pub(crate) enum InventoryItemError {
     Etag(KeyPath),
     #[error("non-deleted inventory item {0:?} lacks is-multipart-uploaded field")]
     Multipart(KeyPath),
-    #[error("inventory item key is not an acceptable filepath")]
+    // Serde (CSV?) errors don't show sources, so we need to include them
+    // manually:
+    #[error("inventory item key is not an acceptable filepath: {0}")]
     KeyPath(#[from] KeyPathFromStringError),
 }
 
