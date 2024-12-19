@@ -1,5 +1,6 @@
 mod consts;
 mod inventory;
+mod keypath;
 mod manifest;
 mod s3;
 mod syncer;
