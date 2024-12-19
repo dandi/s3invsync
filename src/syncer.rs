@@ -162,12 +162,7 @@ impl Syncer {
             etag: etag.to_owned(),
         };
 
-        check_normed_posix_path(&item.key)?;
-        let (dirname, filename) = match item.key.rsplit_once('/') {
-            Some((pre, post)) => (Some(pre), post),
-            None => (None, &*item.key),
-        };
-        check_special_filename(filename)?;
+        let (dirname, filename) = item.key.split();
         let parentdir = if let Some(p) = dirname {
             self.outdir.join(p)
         } else {

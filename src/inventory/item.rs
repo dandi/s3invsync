@@ -1,3 +1,4 @@
+use crate::keypath::{KeyPath, KeyPathFromStringError};
 use crate::s3::S3Location;
 use serde::{de, Deserialize};
 use std::fmt;
@@ -8,7 +9,7 @@ use time::OffsetDateTime;
 #[serde(try_from = "RawInventoryItem")]
 pub(crate) struct InventoryItem {
     pub(crate) bucket: String,
-    pub(crate) key: String,
+    pub(crate) key: KeyPath,
     pub(crate) version_id: String,
     pub(crate) is_latest: bool,
     pub(crate) last_modified_date: OffsetDateTime,
@@ -17,7 +18,7 @@ pub(crate) struct InventoryItem {
 
 impl InventoryItem {
     pub(crate) fn url(&self) -> S3Location {
-        S3Location::new(self.bucket.clone(), self.key.clone())
+        S3Location::new(self.bucket.clone(), String::from(&self.key))
             .with_version_id(self.version_id.clone())
     }
 }
@@ -52,10 +53,11 @@ impl TryFrom<RawInventoryItem> for InventoryItem {
     type Error = InventoryItemError;
 
     fn try_from(value: RawInventoryItem) -> Result<InventoryItem, InventoryItemError> {
+        let key = KeyPath::try_from(value.key)?;
         if value.is_delete_marker {
             Ok(InventoryItem {
                 bucket: value.bucket,
-                key: value.key,
+                key,
                 version_id: value.version_id,
                 is_latest: value.is_latest,
                 last_modified_date: value.last_modified_date,
@@ -63,17 +65,17 @@ impl TryFrom<RawInventoryItem> for InventoryItem {
             })
         } else {
             let Some(size) = value.size else {
-                return Err(InventoryItemError::Size(value.key));
+                return Err(InventoryItemError::Size(key));
             };
             let Some(etag) = value.etag else {
-                return Err(InventoryItemError::Etag(value.key));
+                return Err(InventoryItemError::Etag(key));
             };
             let Some(is_multipart_uploaded) = value.is_multipart_uploaded else {
-                return Err(InventoryItemError::Multipart(value.key));
+                return Err(InventoryItemError::Multipart(key));
             };
             Ok(InventoryItem {
                 bucket: value.bucket,
-                key: value.key,
+                key,
                 version_id: value.version_id,
                 is_latest: value.is_latest,
                 last_modified_date: value.last_modified_date,
@@ -90,11 +92,13 @@ impl TryFrom<RawInventoryItem> for InventoryItem {
 #[derive(Clone, Debug, Eq, Error, PartialEq)]
 pub(crate) enum InventoryItemError {
     #[error("non-deleted inventory item {0:?} lacks size")]
-    Size(String),
+    Size(KeyPath),
     #[error("non-deleted inventory item {0:?} lacks etag")]
-    Etag(String),
+    Etag(KeyPath),
     #[error("non-deleted inventory item {0:?} lacks is-multipart-uploaded field")]
-    Multipart(String),
+    Multipart(KeyPath),
+    #[error("inventory item key is not an acceptable filepath")]
+    KeyPath(#[from] KeyPathFromStringError),
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]

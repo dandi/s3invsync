@@ -43,6 +43,7 @@ tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.19", features = ["local-time", "time"] }
 
 [dev-dependencies]
+assert_matches = "1.5.0"
 rstest = { version = "0.23.0", default-features = false }
 
 [build-dependencies]
