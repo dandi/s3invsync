@@ -239,8 +239,6 @@ impl Syncer {
                     tracing::info!(path = %latest_path.display(), "Backup path already exists and metadata matches; doing nothing");
                 } else {
                     tracing::info!(path = %latest_path.display(), "Backup path already exists but metadata does not match; renaming current file and downloading correct version");
-                    // TODO: Add cancellation & cleanup logic around the rest
-                    // of this block:
                     self.move_object_file(
                         &latest_path,
                         &parentdir.join(current_md.old_filename(filename)),
@@ -255,16 +253,12 @@ impl Syncer {
                 let oldpath = parentdir.join(md.old_filename(filename));
                 if ensure_file(&oldpath).await? {
                     tracing::info!(path = %latest_path.display(), oldpath = %oldpath.display(), "Backup path does not exist but \"old\" path does; will rename");
-                    // TODO: Add cancellation & cleanup logic around the rest
-                    // of this block:
                     self.move_object_file(&oldpath, &latest_path)?;
                     mdmanager.set(md).await.with_context(|| {
                         format!("failed to set local metadata for {}", item.url())
                     })?;
                 } else {
                     tracing::info!(path = %latest_path.display(), "Backup path does not exist; will download");
-                    // TODO: Add cancellation & cleanup logic around the rest
-                    // of this block:
                     if self.download_item(&item, &parentdir, latest_path).await? {
                         mdmanager.set(md).await.with_context(|| {
                             format!("failed to set local metadata for {}", item.url())
@@ -290,8 +284,6 @@ impl Syncer {
                         })?
                 {
                     tracing::info!(path = %oldpath.display(), "Backup path does not exist, but \"latest\" file has matching metadata; renaming \"latest\" file");
-                    // TODO: Add cancellation & cleanup logic around the rest
-                    // of this block:
                     self.move_object_file(&latest_path, &oldpath)?;
                     mdmanager.delete().await.with_context(|| {
                         format!(
