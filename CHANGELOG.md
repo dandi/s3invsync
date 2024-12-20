@@ -15,6 +15,7 @@ In Development
 - Ignore keys in inventory lists that end with a slash and are zero-sized
 - Fix locking of paths currently being processed
 - Increase number of retries on failed S3 requests to 10 attempts
+- Support loading AWS credentials from standard locations
 
 v0.1.0-alpha (2024-11-26)
 -------------------------
