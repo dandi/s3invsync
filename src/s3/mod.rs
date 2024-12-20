@@ -40,6 +40,7 @@ impl S3Client {
             )
             .no_credentials()
             .region(aws_config::Region::new(region))
+            .retry_config(aws_config::retry::RetryConfig::standard().with_max_attempts(10))
             .load()
             .await;
         let inner = Client::new(&config);
