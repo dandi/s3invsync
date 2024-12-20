@@ -1,5 +1,5 @@
 use crate::consts::METADATA_FILENAME;
-use crate::inventory::{InventoryItem, ItemDetails};
+use crate::inventory::{InventoryEntry, InventoryItem, ItemDetails};
 use crate::manifest::CsvManifest;
 use crate::s3::S3Client;
 use crate::timestamps::DateHM;
@@ -71,11 +71,18 @@ impl Syncer {
                     let sender = sender.clone();
                     let r = token
                         .run_until_cancelled(async move {
-                            let itemlist = clnt.download_inventory_csv(fspec).await?;
-                            for item in itemlist {
-                                if sender.send(item?).await.is_err() {
-                                    // Assume we're shutting down
-                                    return Ok(());
+                            let entries = clnt.download_inventory_csv(fspec).await?;
+                            for entry in entries {
+                                match entry? {
+                                    InventoryEntry::Directory(d) => {
+                                        tracing::debug!(url = %d.url(), "Ignoring directory entry in inventory list");
+                                    }
+                                    InventoryEntry::Item(item) => {
+                                        if sender.send(item).await.is_err() {
+                                            // Assume we're shutting down
+                                            return Ok(());
+                                        }
+                                    }
                                 }
                             }
                             Ok(())

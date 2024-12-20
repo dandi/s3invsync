@@ -1,4 +1,4 @@
-use super::item::InventoryItem;
+use super::item::InventoryEntry;
 use crate::s3::S3Location;
 use flate2::bufread::GzDecoder;
 use std::fs::File;
@@ -9,7 +9,7 @@ use thiserror::Error;
 pub(crate) struct InventoryList {
     path: PathBuf,
     url: S3Location,
-    inner: csv::DeserializeRecordsIntoIter<GzDecoder<BufReader<File>>, InventoryItem>,
+    inner: csv::DeserializeRecordsIntoIter<GzDecoder<BufReader<File>>, InventoryEntry>,
 }
 
 impl InventoryList {
@@ -26,7 +26,7 @@ impl InventoryList {
 }
 
 impl Iterator for InventoryList {
-    type Item = Result<InventoryItem, InventoryListError>;
+    type Item = Result<InventoryEntry, InventoryListError>;
 
     fn next(&mut self) -> Option<Self::Item> {
         Some(self.inner.next()?.map_err(|source| InventoryListError {
