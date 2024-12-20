@@ -10,7 +10,10 @@ use std::collections::BTreeMap;
 use std::io::ErrorKind;
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc, Mutex,
+};
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 
@@ -28,6 +31,9 @@ pub(crate) struct Syncer {
     path_filter: Option<regex::Regex>,
     locks: lockable::LockPool<PathBuf>,
     token: CancellationToken,
+    obj_sender: Mutex<Option<async_channel::Sender<InventoryItem>>>,
+    obj_receiver: async_channel::Receiver<InventoryItem>,
+    terminated: AtomicBool,
 }
 
 impl Syncer {
@@ -40,6 +46,7 @@ impl Syncer {
         object_jobs: NonZeroUsize,
         path_filter: Option<regex::Regex>,
     ) -> Arc<Syncer> {
+        let (obj_sender, obj_receiver) = async_channel::bounded(CHANNEL_SIZE);
         Arc::new(Syncer {
             client: Arc::new(client),
             outdir,
@@ -50,15 +57,38 @@ impl Syncer {
             path_filter,
             locks: lockable::LockPool::new(),
             token: CancellationToken::new(),
+            obj_sender: Mutex::new(Some(obj_sender)),
+            obj_receiver,
+            terminated: AtomicBool::new(false),
         })
     }
 
     pub(crate) async fn run(self: &Arc<Self>, manifest: CsvManifest) -> Result<(), MultiError> {
+        tokio::spawn({
+            let this = self.clone();
+            async move {
+                if tokio::signal::ctrl_c().await.is_ok() {
+                    tracing::info!("Ctrl-C received; shutting down momentarily ...");
+                    this.shutdown();
+                    this.terminated.store(true, Ordering::Release);
+                }
+            }
+        });
+
         tracing::trace!(path = %self.outdir.display(), "Creating root output directory");
         fs_err::create_dir_all(&self.outdir).map_err(|e| MultiError(vec![e.into()]))?;
         let mut joinset = JoinSet::new();
         let (fspec_sender, fspec_receiver) = async_channel::bounded(CHANNEL_SIZE);
-        let (obj_sender, obj_receiver) = async_channel::bounded(CHANNEL_SIZE);
+        let obj_sender = {
+            let guard = self
+                .obj_sender
+                .lock()
+                .expect("obj_sender mutex should not be poisoned");
+            guard
+                .as_ref()
+                .cloned()
+                .expect("obj_sender should not be None")
+        };
 
         for _ in 0..self.inventory_jobs.get() {
             let clnt = self.client.clone();
@@ -98,6 +128,13 @@ impl Syncer {
             });
         }
         drop(obj_sender);
+        {
+            let mut guard = self
+                .obj_sender
+                .lock()
+                .expect("obj_sender mutex should not be poisoned");
+            *guard = None;
+        }
         drop(fspec_receiver);
 
         joinset.spawn(async move {
@@ -111,7 +148,7 @@ impl Syncer {
 
         for _ in 0..self.object_jobs.get() {
             let this = self.clone();
-            let recv = obj_receiver.clone();
+            let recv = self.obj_receiver.clone();
             joinset.spawn(async move {
                 while let Ok(item) = recv.recv().await {
                     if this.token.is_cancelled() {
@@ -131,9 +168,7 @@ impl Syncer {
                     tracing::error!(error = ?e, "Error occurred");
                     if errors.is_empty() {
                         tracing::info!("Shutting down in response to error");
-                        self.token.cancel();
-                        obj_receiver.close();
-                        self.log_process_info();
+                        self.shutdown();
                     }
                     errors.push(e);
                 }
@@ -142,11 +177,20 @@ impl Syncer {
             }
         }
 
+        if self.terminated.load(Ordering::Acquire) {
+            errors.push(anyhow::anyhow!("Shut down due to Ctrl-C"));
+        }
         if !errors.is_empty() {
             Err(MultiError(errors))
         } else {
             Ok(())
         }
+    }
+
+    fn shutdown(self: &Arc<Self>) {
+        self.token.cancel();
+        self.obj_receiver.close();
+        self.log_process_info();
     }
 
     #[tracing::instrument(skip_all, fields(url = %item.url()))]

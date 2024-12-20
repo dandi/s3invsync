@@ -16,6 +16,7 @@ In Development
 - Fix locking of paths currently being processed
 - Increase number of retries on failed S3 requests to 10 attempts
 - Support loading AWS credentials from standard locations
+- Treat Ctrl-C like an error, triggering graceful shutdown
 
 v0.1.0-alpha (2024-11-26)
 -------------------------
