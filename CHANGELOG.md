@@ -12,6 +12,8 @@ In Development
   delete the directory
 - If any of the ancestors for an item's download path points to a file, delete
   the file
+- Ignore keys in inventory lists that end with a slash and are zero-sized
+- Fix locking of paths currently being processed
 
 v0.1.0-alpha (2024-11-26)
 -------------------------
