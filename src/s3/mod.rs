@@ -5,6 +5,10 @@ use self::streams::{ListManifestDates, ListObjectsError};
 use crate::inventory::InventoryList;
 use crate::manifest::{CsvManifest, FileSpec};
 use crate::timestamps::{Date, DateHM, DateMaybeHM};
+use aws_credential_types::{
+    provider::{error::CredentialsError, ProvideCredentials},
+    Credentials,
+};
 use aws_sdk_s3::{
     operation::get_object::{GetObjectError, GetObjectOutput},
     primitives::ByteStreamError,
@@ -33,17 +37,18 @@ impl S3Client {
         trace_progress: bool,
     ) -> Result<S3Client, ClientBuildError> {
         let tmpdir = tempfile::tempdir().map_err(ClientBuildError::Tempdir)?;
-        let config = aws_config::from_env()
+        let mut config = aws_config::from_env()
             .app_name(
                 aws_config::AppName::new(env!("CARGO_PKG_NAME"))
                     .expect("crate name should be a valid app name"),
             )
-            .no_credentials()
             .region(aws_config::Region::new(region))
-            .retry_config(aws_config::retry::RetryConfig::standard().with_max_attempts(10))
-            .load()
-            .await;
-        let inner = Client::new(&config);
+            .retry_config(aws_config::retry::RetryConfig::standard().with_max_attempts(10));
+        config = match get_credentials().await? {
+            Some(creds) => config.credentials_provider(creds),
+            None => config.no_credentials(),
+        };
+        let inner = Client::new(&config.load().await);
         Ok(S3Client {
             inner,
             inventory_base,
@@ -260,6 +265,8 @@ impl S3Client {
 pub(crate) enum ClientBuildError {
     #[error("failed to create temporary downloads directory")]
     Tempdir(#[from] std::io::Error),
+    #[error("failed to fetch AWS credentials")]
+    Credentials(#[from] CredentialsError),
 }
 
 #[derive(Debug, Error)]
@@ -384,3 +391,13 @@ pub(crate) async fn get_bucket_region(bucket: &str) -> Result<String, GetBucketR
 #[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
 #[error("S3 response did not include bucket region")]
 pub(crate) struct GetBucketRegionError;
+
+async fn get_credentials() -> Result<Option<Credentials>, CredentialsError> {
+    tracing::debug!("Checking for AWS credentials ...");
+    let provider = aws_config::default_provider::credentials::default_provider().await;
+    match provider.provide_credentials().await {
+        Ok(creds) => Ok(Some(creds)),
+        Err(CredentialsError::CredentialsNotLoaded(_)) => Ok(None),
+        Err(e) => Err(e),
+    }
+}

@@ -17,7 +17,8 @@ publish = false
 [dependencies]
 anyhow = "1.0.94"
 async-channel = "2.3.1"
-aws-config = { version = "1.5.10", features = ["behavior-version-latest"] }
+aws-config = { version = "1.5.10", features = ["behavior-version-latest", "rustls"] }
+aws-credential-types = "1.2.1"
 aws-sdk-s3 = "1.65.0"
 aws-smithy-async = "1.2.1"
 aws-smithy-runtime-api = "1.7.3"

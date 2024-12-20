@@ -52,6 +52,11 @@ manifest file).
 
 [inventory manifest files]: https://docs.aws.amazon.com/AmazonS3/latest/userguide/storage-inventory-location.html
 
+`s3invsync` honors AWS credentials stored in the standard locations (e.g., the
+environment variables `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, and
+`AWS_REGION` or the default credentials files `~/.aws/config` and
+`~/.aws/credentials`).  For public buckets, no credentials need to be provided.
+
 When downloading a given key from S3, the latest version (if not deleted) is
 stored at `{outdir}/{key}`, and the versionIds and etags of all latest object
 versions in a given directory are stored in `.s3invsync.versions.json` in that
