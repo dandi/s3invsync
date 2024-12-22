@@ -188,9 +188,11 @@ impl Syncer {
     }
 
     fn shutdown(self: &Arc<Self>) {
-        self.token.cancel();
-        self.obj_receiver.close();
-        self.log_process_info();
+        if !self.token.is_cancelled() {
+            self.token.cancel();
+            self.obj_receiver.close();
+            self.log_process_info();
+        }
     }
 
     #[tracing::instrument(skip_all, fields(url = %item.url()))]
