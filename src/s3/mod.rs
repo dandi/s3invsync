@@ -1,3 +1,4 @@
+//! Working directly with AWS S3
 mod location;
 mod streams;
 pub(crate) use self::location::S3Location;
@@ -22,11 +23,20 @@ use std::io::{BufReader, BufWriter, Seek, Write};
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 
+/// Client for interacting with S3
 #[derive(Debug)]
 pub(crate) struct S3Client {
+    /// The inner AWS SDK client object
     inner: Client,
+
+    /// The location of the manifest files for the S3 inventory that is being
+    /// backed up
     inventory_base: S3Location,
+
+    /// Whether to emit TRACE messages for download progress
     trace_progress: bool,
+
+    /// A temporary directory in which to download temporary files
     tmpdir: tempfile::TempDir,
 }
 
@@ -57,6 +67,9 @@ impl S3Client {
         })
     }
 
+    /// Create a temporary file at `subpath` within the temporary directory for
+    /// downloading `objloc` to.  Returns a filehandle opened for reading &
+    /// writing and the full path to the file.
     fn make_dl_tempfile(
         &self,
         subpath: &Path,
@@ -83,6 +96,15 @@ impl S3Client {
             })
     }
 
+    /// Fetch the manifest file for inventory created at the given timestamp.
+    ///
+    /// If `when` is `None`, the latest manifest is returned.  If `when`
+    /// is a date without an hour & minute, the latest manifest at that date is
+    /// returned.  Otherwise, `when` is a date with an hour & minute, and the
+    /// manifest for that exact timestamp is returned.
+    ///
+    /// The return value includes both the manifest and the full, exact
+    /// timestamp.
     pub(crate) async fn get_manifest_for_date(
         &self,
         when: Option<DateMaybeHM>,
@@ -97,8 +119,10 @@ impl S3Client {
         Ok((manifest, ts))
     }
 
+    /// Return the full timestamp for the latest manifest, either (if `day` is
+    /// `None`) out of all manifests or else the latest on the given date.
     #[tracing::instrument(skip_all, fields(day = day.map(|d| d.to_string())))]
-    pub(crate) async fn get_latest_manifest_timestamp(
+    async fn get_latest_manifest_timestamp(
         &self,
         day: Option<Date>,
     ) -> Result<DateHM, FindManifestError> {
@@ -111,7 +135,7 @@ impl S3Client {
             tracing::debug!("Listing all manifests ...");
             self.inventory_base.join("")
         };
-        let mut stream = ListManifestDates::new(self, url.clone());
+        let mut stream = ListManifestDates::new(self, &url);
         let mut maxdate = None;
         while let Some(d) = stream.try_next().await? {
             match maxdate {
@@ -123,6 +147,7 @@ impl S3Client {
         maxdate.ok_or_else(|| FindManifestError::NoMatch { url })
     }
 
+    /// Perform a "Get Object" request for the object at `url`
     async fn get_object(&self, url: &S3Location) -> Result<GetObjectOutput, GetError> {
         let mut op = self.inner.get_object().bucket(url.bucket()).key(url.key());
         if let Some(v) = url.version_id() {
@@ -134,8 +159,13 @@ impl S3Client {
         })
     }
 
+    /// Download, parse, & return the manifest file for the inventory created
+    /// at the timestamp `when`.
+    ///
+    /// The manifest's checksum is also downloaded and used to validate the
+    /// manifest download.
     #[tracing::instrument(skip_all, fields(%when))]
-    pub(crate) async fn get_manifest(&self, when: DateHM) -> Result<CsvManifest, GetManifestError> {
+    async fn get_manifest(&self, when: DateHM) -> Result<CsvManifest, GetManifestError> {
         tracing::debug!("Fetching manifest.checksum file");
         let checksum_url = self
             .inventory_base
@@ -178,6 +208,9 @@ impl S3Client {
         Ok(manifest)
     }
 
+    /// Download the CSV inventory list file described by `fspec` to a
+    /// temporary location and return a filehandle for iterating over its
+    /// entries
     #[tracing::instrument(skip_all, fields(key = fspec.key))]
     pub(crate) async fn download_inventory_csv(
         &self,
@@ -201,11 +234,13 @@ impl S3Client {
         Ok(InventoryList::from_gzip_csv_file(path, url, outfile))
     }
 
+    /// Download the object at `url` and write its bytes to `outfile`.  If
+    /// `md5_digest` is non-`None` (in which case it must be a 32-character
+    /// lowercase hexadecimal string), it is used to validate the download.
     #[tracing::instrument(skip_all, fields(url = %url))]
     pub(crate) async fn download_object(
         &self,
         url: &S3Location,
-        // `md5_digest` must be a 32-character lowercase hexadecimal string
         md5_digest: Option<&str>,
         outfile: &File,
     ) -> Result<(), DownloadError> {
@@ -249,7 +284,7 @@ impl S3Client {
         let actual_md5 = hex::encode(hasher.finalize());
         if let Some(expected_md5) = md5_digest {
             if actual_md5 != expected_md5 {
-                return Err(DownloadError::Verify {
+                return Err(DownloadError::Md5 {
                     url: url.to_owned(),
                     expected_md5: expected_md5.to_owned(),
                     actual_md5,
@@ -261,21 +296,29 @@ impl S3Client {
     }
 }
 
+/// Error returned by [`S3Client::new()`]
 #[derive(Debug, Error)]
 pub(crate) enum ClientBuildError {
+    /// The client's temporary directory could not be created
     #[error("failed to create temporary downloads directory")]
     Tempdir(#[from] std::io::Error),
+
+    /// There was an error fetching AWS credentials
     #[error("failed to fetch AWS credentials")]
     Credentials(#[from] CredentialsError),
 }
 
+/// Error returned by [`S3Client::make_dl_tempfile()`]
 #[derive(Debug, Error)]
 pub(crate) enum TempfileError {
+    /// Failed to create parent directories for temporary file path
     #[error("failed to create parent directories for tempfile for downloading {url}")]
     Mkdir {
         url: S3Location,
         source: std::io::Error,
     },
+
+    /// Failed to open temporary file handle
     #[error("failed to open tempfile for downloading {url}")]
     Open {
         url: S3Location,
@@ -283,39 +326,60 @@ pub(crate) enum TempfileError {
     },
 }
 
+/// Error returned by [`S3Client::get_latest_manifest_timestamp()`]
 #[derive(Debug, Error)]
 pub(crate) enum FindManifestError {
+    /// An error occurred while listing the manifest directories
     #[error(transparent)]
     List(#[from] ListObjectsError),
+
+    /// No matching manifests were found
     #[error("no manifests found in {url}")]
     NoMatch { url: S3Location },
 }
 
+/// Error returned by [`S3Client::get_manifest_for_date()`] and
+/// [`S3Client::get_manifest()`]
 #[derive(Debug, Error)]
 pub(crate) enum GetManifestError {
+    /// Failed to locate manifest for the given timestamp
     #[error(transparent)]
     Find(#[from] FindManifestError),
+
+    /// Failed to perform a "Get Object" request for the manifest's checksum
     #[error(transparent)]
     Get(#[from] GetError),
-    #[error(transparent)]
-    Download(#[from] DownloadError),
+
+    /// Failed to download the manifest's checksum
     #[error("failed downloading checksum at {url}")]
     DownloadChecksum {
         url: S3Location,
         source: ByteStreamError,
     },
+
+    /// Failed to decode the manifest's checksum file as UTF-8
     #[error("manifest checksum contents at {url} are not UTF-8")]
     DecodeChecksum {
         url: S3Location,
         source: std::str::Utf8Error,
     },
+
+    /// Failed to create temporary download file
     #[error(transparent)]
     Tempfile(#[from] TempfileError),
+
+    /// Failed to download the manifest
+    #[error(transparent)]
+    Download(#[from] DownloadError),
+
+    /// Failed to rewind manifest filehandle after downloading
     #[error("failed to rewind tempfile after downloading {url}")]
     Rewind {
         url: S3Location,
         source: std::io::Error,
     },
+
+    /// Failed to parse manifest contents
     #[error("failed to deserialize manifest at {url}")]
     Parse {
         url: S3Location,
@@ -323,34 +387,48 @@ pub(crate) enum GetManifestError {
     },
 }
 
+/// Error returned by [`S3Client::download_object()`]
 #[derive(Debug, Error)]
 pub(crate) enum DownloadError {
+    /// Failed to perform "Get Object" request
     #[error(transparent)]
     Get(#[from] GetError),
+
+    /// Error while receiving bytes for the object
     #[error("failed downloading contents for {url}")]
     Download {
         url: S3Location,
         source: ByteStreamError,
     },
+
+    /// Error while writing bytes to disk
     #[error("failed writing contents of {url} to disk")]
     Write {
         url: S3Location,
         source: std::io::Error,
     },
+
+    /// Object's computed MD5 digest did not match the expected MD5 digest
     #[error("checksum verification for object at {url} failed; expected MD5 {expected_md5:?}, got {actual_md5:?}")]
-    Verify {
+    Md5 {
         url: S3Location,
         expected_md5: String,
         actual_md5: String,
     },
 }
 
+/// Error returned by [`S3Client::download_inventory_csv()`]
 #[derive(Debug, Error)]
 pub(crate) enum CsvDownloadError {
+    /// Failed to create temporary download file
     #[error(transparent)]
     Tempfile(#[from] TempfileError),
+
+    /// Failed to download the inventory list file
     #[error(transparent)]
     Download(#[from] DownloadError),
+
+    /// Failed to rewind filehandle after downloading
     #[error("failed to rewind tempfile after downloading {url}")]
     Rewind {
         url: S3Location,
@@ -358,6 +436,8 @@ pub(crate) enum CsvDownloadError {
     },
 }
 
+/// Error returned by [`S3Client::get_object()`] when a "Get Object" request
+/// fails
 #[derive(Debug, Error)]
 #[error("failed to get object at {url}")]
 pub(crate) struct GetError {
@@ -365,6 +445,7 @@ pub(crate) struct GetError {
     source: SdkError<GetObjectError, HttpResponse>,
 }
 
+/// Determine the region that the given S3 bucket belongs to
 // cf. <https://github.com/awslabs/aws-sdk-rust/issues/1052>
 pub(crate) async fn get_bucket_region(bucket: &str) -> Result<String, GetBucketRegionError> {
     let config = aws_config::from_env()
@@ -388,10 +469,15 @@ pub(crate) async fn get_bucket_region(bucket: &str) -> Result<String, GetBucketR
     bucket_region.ok_or(GetBucketRegionError)
 }
 
+/// Error returned by [`get_bucket_region()`].
+///
+/// This usually indicates that the given bucket does not exist.
 #[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
-#[error("S3 response did not include bucket region")]
+#[error("could not determine S3 bucket region")]
 pub(crate) struct GetBucketRegionError;
 
+/// Load the AWS credentials for the environment.  If there are no credentials,
+/// return `None`.
 async fn get_credentials() -> Result<Option<Credentials>, CredentialsError> {
     tracing::debug!("Checking for AWS credentials ...");
     let provider = aws_config::default_provider::credentials::default_provider().await;

@@ -3,6 +3,7 @@ use std::fmt;
 use std::str::FromStr;
 use thiserror::Error;
 
+/// A year, month, day, hour, and minute
 #[derive(Copy, Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(crate) struct DateHM {
     year: u16,
@@ -25,6 +26,7 @@ impl fmt::Display for DateHM {
 impl FromStr for DateHM {
     type Err = DateHMError;
 
+    /// Parse a `DateHM` from a string of the form `YYYY-MM-DDTHH-MMZ`
     fn from_str(s: &str) -> Result<DateHM, DateHMError> {
         let mut scanner = Scanner::new(s, DateHMError);
         let year = scanner.scan_year()?;
@@ -48,6 +50,7 @@ impl FromStr for DateHM {
     }
 }
 
+/// Error returned when parsing an invalid `DateHM` string
 #[derive(Copy, Clone, Debug, Eq, Error, PartialEq)]
 #[error("invalid timestamp format; expected YYYY-MM-DDTHH-MMZ")]
 pub(crate) struct DateHMError;

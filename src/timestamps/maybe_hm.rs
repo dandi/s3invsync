@@ -4,6 +4,7 @@ use std::fmt;
 use std::str::FromStr;
 use thiserror::Error;
 
+/// A date — year, month, day — optionally including an hour and minute as well
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum DateMaybeHM {
     Date(Date),
@@ -22,6 +23,8 @@ impl fmt::Display for DateMaybeHM {
 impl FromStr for DateMaybeHM {
     type Err = DateMaybeHMError;
 
+    /// Parse a `DateMaybeHM` from a string of the form `YYYY-MM-DD` or
+    /// `YYYY-MM-DDTHH-MMZ`
     fn from_str(s: &str) -> Result<DateMaybeHM, DateMaybeHMError> {
         if s.contains('T') {
             match s.parse::<DateHM>() {
@@ -37,6 +40,7 @@ impl FromStr for DateMaybeHM {
     }
 }
 
+/// Error returned when parsing an invalid input string
 #[derive(Copy, Clone, Debug, Eq, Error, PartialEq)]
 #[error("invalid timestamp format; expected YYYY-MM-DD[THH-MMZ]")]
 pub(crate) struct DateMaybeHMError;

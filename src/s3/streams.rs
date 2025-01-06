@@ -15,6 +15,8 @@ use thiserror::Error;
 
 type InnerListError = SdkError<ListObjectsV2Error, HttpResponse>;
 
+/// A [`Stream`] that paginates over S3 directories with a given prefix and
+/// parses their names as [`DateHM`] values, yielding the successful parses.
 #[derive(Debug)]
 #[must_use = "streams do nothing unless polled"]
 pub(super) struct ListManifestDates {
@@ -24,7 +26,9 @@ pub(super) struct ListManifestDates {
 }
 
 impl ListManifestDates {
-    pub(super) fn new(client: &S3Client, url: S3Location) -> Self {
+    /// Construct a new `ListManifestDates` that uses `client` to paginate over
+    /// directories that have the prefix given by `url`.
+    pub(super) fn new(client: &S3Client, url: &S3Location) -> Self {
         ListManifestDates {
             url: url.clone(),
             inner: Some(
@@ -85,6 +89,8 @@ impl Stream for ListManifestDates {
     }
 }
 
+/// Error yielded by [`ListManifestDates`] when a "List Objects V2" request
+/// fails
 #[derive(Debug, Error)]
 #[error("failed to list S3 objects in {url}")]
 pub(crate) struct ListObjectsError {
