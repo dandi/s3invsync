@@ -1,5 +1,5 @@
-In Development
---------------
+v0.1.0-alpha.2 (2025-01-06)
+---------------------------
 - After fully scanning an inventory list CSV file, delete it
 - `--version` now includes the Git commit hash
 - Log various process details when an error first occurs
