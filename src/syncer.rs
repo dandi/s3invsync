@@ -17,22 +17,51 @@ use std::sync::{
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 
+/// Capacity of async channels
 const CHANNEL_SIZE: usize = 65535;
 
+/// Lock guard returned by [`Syncer::lock_path()`]
 type Guard<'a> = <lockable::LockPool<PathBuf> as lockable::Lockable<PathBuf, ()>>::Guard<'a>;
 
+/// Object responsible for syncing an S3 bucket to a local backup by means of
+/// the bucket's S3 Inventory
 pub(crate) struct Syncer {
+    /// The client for interacting with S3
     client: Arc<S3Client>,
+
+    /// The root path of the local backup directory
     outdir: PathBuf,
+
+    /// The timestamp at which the inventory was created on S3
     manifest_date: DateHM,
+
+    /// The time at which the overall backup procedure started
     start_time: std::time::Instant,
+
+    /// The number of concurrent downloads of CSV inventory lists
     inventory_jobs: NonZeroUsize,
+
+    /// The number of concurrent downloads of S3 objects
     object_jobs: NonZeroUsize,
+
+    /// Only download objects whose keys match the given regex
     path_filter: Option<regex::Regex>,
+
+    /// A pool for managing locks on paths
     locks: lockable::LockPool<PathBuf>,
+
+    /// A [`CancellationToken`] used for managing graceful shutdown
     token: CancellationToken,
+
+    /// A clone of the channel used for sending inventory entries off to be
+    /// downloaded.  This is set to `None` after spawning all of the inventory
+    /// list download tasks.
     obj_sender: Mutex<Option<async_channel::Sender<InventoryItem>>>,
+
+    /// A clone of the channel used for receiving inventory entries to download
     obj_receiver: async_channel::Receiver<InventoryItem>,
+
+    /// Whether the backup was terminated by Ctrl-C
     terminated: AtomicBool,
 }
 
@@ -196,7 +225,7 @@ impl Syncer {
     }
 
     #[tracing::instrument(skip_all, fields(url = %item.url()))]
-    async fn process_item(self: &Arc<Self>, item: InventoryItem) -> anyhow::Result<()> {
+    async fn process_item(&self, item: InventoryItem) -> anyhow::Result<()> {
         if let Some(ref rgx) = self.path_filter {
             if !rgx.is_match(&item.key) {
                 tracing::info!("Object key does not match --path-filter; skipping");
@@ -407,22 +436,38 @@ impl Syncer {
     }
 }
 
+/// Metadata about the latest version of a key
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 struct Metadata {
+    /// The object's version ID
     version_id: String,
+
+    /// The object's etag
     etag: String,
 }
 
 impl Metadata {
+    /// Return the filename used for backing up a non-latest object that has
+    /// `self` as its metadata and `basename` as the filename portion of its
+    /// key
     fn old_filename(&self, basename: &str) -> String {
         format!("{}.old.{}.{}", basename, self.version_id, self.etag)
     }
 }
 
+/// Handle for manipulating the metadata for the latest version of a key in a
+/// local JSON database
 struct MetadataManager<'a> {
     syncer: &'a Syncer,
+
+    /// The local directory in which the downloaded object and the JSON
+    /// database are both located
     dirpath: &'a Path,
+
+    /// The path to the JSON database
     database_path: PathBuf,
+
+    /// The filename of the object
     filename: &'a str,
 }
 
@@ -436,10 +481,13 @@ impl<'a> MetadataManager<'a> {
         }
     }
 
+    /// Acquire a lock on this JSON database
     async fn lock(&self) -> Guard<'a> {
         self.syncer.lock_path(self.database_path.clone()).await
     }
 
+    /// Read & parse the database file.  If the file does not exist, return an
+    /// empty map.
     fn load(&self) -> anyhow::Result<BTreeMap<String, Metadata>> {
         let content = match fs_err::read_to_string(&self.database_path) {
             Ok(content) => content,
@@ -454,6 +502,7 @@ impl<'a> MetadataManager<'a> {
         })
     }
 
+    /// Set the content of the database file to the serialized map
     fn store(&self, data: BTreeMap<String, Metadata>) -> anyhow::Result<()> {
         let fp = tempfile::Builder::new()
             .prefix(".s3invsync.versions.")
@@ -479,6 +528,7 @@ impl<'a> MetadataManager<'a> {
         Ok(())
     }
 
+    /// Retrieve the metadata for the key from the database
     async fn get(&self) -> anyhow::Result<Metadata> {
         tracing::trace!(file = self.filename, database = %self.database_path.display(), "Fetching object metadata for file from database");
         let mut data = {
@@ -495,6 +545,7 @@ impl<'a> MetadataManager<'a> {
         Ok(md)
     }
 
+    /// Set the metadata for the key in the database to `md`
     async fn set(&self, md: Metadata) -> anyhow::Result<()> {
         tracing::trace!(file = self.filename, database = %self.database_path.display(), "Setting object metadata for file in database");
         let _guard = self.lock().await;
@@ -504,6 +555,7 @@ impl<'a> MetadataManager<'a> {
         Ok(())
     }
 
+    /// Remove the metadata for the key from the database
     async fn delete(&self) -> anyhow::Result<()> {
         tracing::trace!(file = self.filename, database = %self.database_path.display(), "Deleting object metadata for file from database");
         let _guard = self.lock().await;

@@ -1,3 +1,4 @@
+//! Date types for identifying inventory backups by timestamp
 mod date;
 mod datehm;
 mod maybe_hm;

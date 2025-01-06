@@ -15,25 +15,12 @@ use thiserror::Error;
 pub(crate) struct KeyPath(String);
 
 impl KeyPath {
-    #[allow(dead_code)]
-    pub(crate) fn name(&self) -> &str {
-        self.0
-            .split('/')
-            .next_back()
-            .expect("path should be nonempty")
-    }
-
     /// Split the path into the directory component (if any) and filename
     pub(crate) fn split(&self) -> (Option<&str>, &str) {
         match self.0.rsplit_once('/') {
             Some((pre, post)) => (Some(pre), post),
             None => (None, &*self.0),
         }
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn components(&self) -> std::str::Split<'_, char> {
-        self.0.split('/')
     }
 }
 
@@ -44,9 +31,8 @@ impl From<KeyPath> for String {
 }
 
 impl From<&KeyPath> for String {
-    #[allow(clippy::string_to_string)]
     fn from(value: &KeyPath) -> String {
-        value.0.to_string()
+        value.0.clone()
     }
 }
 
@@ -177,13 +163,6 @@ mod tests {
     use rstest::rstest;
 
     #[rstest]
-    #[case("foo", "foo")]
-    #[case("foo/bar/baz", "baz")]
-    fn test_name(#[case] p: KeyPath, #[case] name: &str) {
-        assert_eq!(p.name(), name);
-    }
-
-    #[rstest]
     #[case("foo.nwb")]
     #[case("foo/bar.nwb")]
     fn test_good_paths(#[case] s: &str) {
@@ -209,14 +188,6 @@ mod tests {
     fn test_bad_paths(#[case] s: &str) {
         let r = s.parse::<KeyPath>();
         assert_matches!(r, Err(_));
-    }
-
-    #[rstest]
-    #[case("foo", vec!["foo"])]
-    #[case("foo/bar", vec!["foo", "bar"])]
-    #[case("foo/bar/quux", vec!["foo", "bar", "quux"])]
-    fn test_components(#[case] path: KeyPath, #[case] comps: Vec<&str>) {
-        assert_eq!(path.components().collect::<Vec<_>>(), comps);
     }
 
     #[rstest]

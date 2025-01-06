@@ -3,6 +3,7 @@ use std::fmt;
 use std::str::FromStr;
 use thiserror::Error;
 
+/// A date consisting of a (year, month, day) triple
 #[derive(Copy, Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(crate) struct Date {
     year: u16,
@@ -19,6 +20,7 @@ impl fmt::Display for Date {
 impl FromStr for Date {
     type Err = DateError;
 
+    /// Parse a date from a string of the form `YYYY-MM-DD`
     fn from_str(s: &str) -> Result<Date, DateError> {
         let mut scanner = Scanner::new(s, DateError);
         let year = scanner.scan_year()?;
@@ -31,6 +33,7 @@ impl FromStr for Date {
     }
 }
 
+/// Error returned when parsing an invalid date string
 #[derive(Copy, Clone, Debug, Eq, Error, PartialEq)]
 #[error("invalid timestamp format; expected YYYY-MM-DD")]
 pub(crate) struct DateError;

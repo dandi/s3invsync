@@ -2,6 +2,8 @@ use std::fmt;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
+/// An error type containing a collection of one or more errors that occurred
+/// concurrently during syncing
 #[derive(Debug)]
 pub(crate) struct MultiError(pub(crate) Vec<anyhow::Error>);
 
@@ -23,6 +25,7 @@ impl fmt::Display for MultiError {
 
 impl std::error::Error for MultiError {}
 
+/// If `r` is an `Err` with the given `ErrorKind`, convert it to `Ok(())`.
 fn suppress_error_kind(r: std::io::Result<()>, kind: ErrorKind) -> std::io::Result<()> {
     if matches!(r, Err(ref e) if e.kind() == kind) {
         Ok(())
@@ -31,6 +34,7 @@ fn suppress_error_kind(r: std::io::Result<()>, kind: ErrorKind) -> std::io::Resu
     }
 }
 
+/// Returns `true` if `p` is an empty directory
 pub(crate) fn is_empty_dir(p: &Path) -> std::io::Result<bool> {
     let mut iter = fs_err::read_dir(p)?;
     match iter.next() {
@@ -78,6 +82,9 @@ pub(crate) async fn ensure_file(p: &Path) -> anyhow::Result<bool> {
     }
 }
 
+/// Ensure that the path formed by concatenating `root` with `dirs` exists and
+/// is a directory.  If `root` concatenated with any leading sequence of `dirs`
+/// already exists but is not a directory, delete it.
 pub(crate) fn force_create_dir_all<I: IntoIterator<Item: AsRef<Path>>>(
     root: &Path,
     dirs: I,

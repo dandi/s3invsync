@@ -5,6 +5,7 @@ use std::fmt;
 use thiserror::Error;
 use time::OffsetDateTime;
 
+/// An entry in an inventory list file
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 #[serde(try_from = "RawInventoryEntry")]
 pub(crate) enum InventoryEntry {
@@ -12,49 +13,78 @@ pub(crate) enum InventoryEntry {
     Item(InventoryItem),
 }
 
+/// An entry in an inventory list file pointing to a directory object
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct Directory {
+    /// The bucket on which the object is located
     bucket: String,
+
+    /// The object's key (ends in '/')
     // Not a KeyPath, as the key ends in '/':
     key: String,
+
+    /// The object's version ID
     version_id: String,
 }
 
 impl Directory {
+    /// Returns the S3 URL for the object
     pub(crate) fn url(&self) -> S3Location {
         S3Location::new(self.bucket.clone(), self.key.clone())
             .with_version_id(self.version_id.clone())
     }
 }
 
+/// A non-directory entry in an inventory list file, describing an object to
+/// back up
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct InventoryItem {
+    /// The bucket on which the object is located
     pub(crate) bucket: String,
+
+    /// The object's key
     pub(crate) key: KeyPath,
+
+    /// The object's version ID
     pub(crate) version_id: String,
+
+    /// True iff this is the latest version of the key
     pub(crate) is_latest: bool,
+
+    /// The object's date of last modification
     pub(crate) last_modified_date: OffsetDateTime,
+
+    /// Metadata about the object's content
     pub(crate) details: ItemDetails,
 }
 
 impl InventoryItem {
+    /// Returns the S3 URL for the object
     pub(crate) fn url(&self) -> S3Location {
         S3Location::new(self.bucket.clone(), String::from(&self.key))
             .with_version_id(self.version_id.clone())
     }
 }
 
+/// Metadata about an object's content
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum ItemDetails {
+    /// This version of the object is not a delete marker
     Present {
+        /// The object's size
         size: i64,
+        /// The object's etag
         etag: String,
+        /// Whether the object was uploaded as a multipart upload
         is_multipart_uploaded: bool,
     },
+
+    /// This version of the object is a delete marker
     Deleted,
 }
 
 impl ItemDetails {
+    /// Returns the object's MD5 digest, if available
     pub(crate) fn md5_digest(&self) -> Option<&str> {
         // <https://docs.aws.amazon.com/AmazonS3/latest/API/API_Object.html>
         // Note that encryption type will also need to be taken into account
@@ -121,20 +151,30 @@ impl TryFrom<RawInventoryEntry> for InventoryEntry {
     }
 }
 
+/// Error returned when parsing an inventory entry fails
 #[derive(Clone, Debug, Eq, Error, PartialEq)]
 pub(crate) enum InventoryEntryError {
+    /// The entry was not a delete marker and lacked a size
     #[error("non-deleted inventory item {0:?} lacks size")]
     Size(KeyPath),
+
+    /// The entry was not a delete marker and lacked an etag
     #[error("non-deleted inventory item {0:?} lacks etag")]
     Etag(KeyPath),
+
+    /// The entry was not a delete marker and lacked an is-multipart-uploaded
+    /// field
     #[error("non-deleted inventory item {0:?} lacks is-multipart-uploaded field")]
     Multipart(KeyPath),
+
+    /// The key was not an acceptable filepath
     // Serde (CSV?) errors don't show sources, so we need to include them
     // manually:
     #[error("inventory item key is not an acceptable filepath: {0}")]
     KeyPath(#[from] KeyPathFromStringError),
 }
 
+/// An entry directly parsed from an inventory list
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 struct RawInventoryEntry {
     // IMPORTANT: The order of the fields must match that in
@@ -152,6 +192,7 @@ struct RawInventoryEntry {
     is_multipart_uploaded: Option<bool>,
 }
 
+/// Deserialize a percent-encoded string
 fn percent_decode<'de, D>(deserializer: D) -> Result<String, D::Error>
 where
     D: de::Deserializer<'de>,
