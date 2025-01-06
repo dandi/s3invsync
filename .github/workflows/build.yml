@@ -95,3 +95,4 @@ jobs:
           tag: ${{ github.event.release.tag_name }}
           target_path: target/${{ matrix.target }}/release/s3invsync${{ matrix.suffix }}
           asset_name: s3invsync-${{ matrix.os-name }}-${{ matrix.architecture }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
