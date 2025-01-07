@@ -110,8 +110,8 @@ Options
   inventory for the given date is used) or in the format `YYYY-MM-DDTHH-MMZ`
   (to specify a specific inventory).
 
-- `-I <INT>`, `--inventory-jobs <INT>` — Specify the maximum number of inventory
-  list files to download & process at once [default: 20]
+- `-J <INT>`, `--jobs <INT>` — Specify the maximum number of concurrent
+  download jobs [default: 20]
 
 - `--list-dates` — List available inventory manifest dates instead of
   backing anything up
@@ -119,9 +119,6 @@ Options
 - `-l <level>`, `--log-level <level>` — Set the log level to the given value.
   Possible values are  "`ERROR`", "`WARN`", "`INFO`", "`DEBUG`", and "`TRACE`"
   (all case-insensitive).  [default value: `DEBUG`]
-
-- `-O <INT>`, `--object-jobs <INT>` — Specify the maximum number of inventory
-  entries to download & process at once [default: 20]
 
 - `--path-filter <REGEX>` — Only download objects whose keys match the given
   [regular expression](https://docs.rs/regex/latest/regex/#syntax)

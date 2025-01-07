@@ -39,10 +39,9 @@ struct Arguments {
     #[arg(short, long)]
     date: Option<DateMaybeHM>,
 
-    /// Set the maximum number of inventory list files to download & process at
-    /// once
-    #[arg(short = 'I', long, default_value = "20")]
-    inventory_jobs: NonZeroUsize,
+    /// Set the maximum number of concurrent download jobs
+    #[arg(short = 'J', long, default_value = "20")]
+    jobs: NonZeroUsize,
 
     /// List available inventory manifest dates instead of backing anything up
     #[arg(long)]
@@ -56,11 +55,6 @@ struct Arguments {
         value_name = "ERROR|WARN|INFO|DEBUG|TRACE"
     )]
     log_level: Level,
-
-    /// Set the maximum number of inventory entries to download & process at
-    /// once
-    #[arg(short = 'O', long, default_value = "20")]
-    object_jobs: NonZeroUsize,
 
     /// Only download objects whose keys match the given regular expression
     #[arg(long, value_name = "REGEX")]
@@ -134,8 +128,7 @@ async fn run(args: Arguments) -> anyhow::Result<()> {
             outdir,
             manifest_date,
             start_time,
-            args.inventory_jobs,
-            args.object_jobs,
+            args.jobs,
             args.path_filter,
             args.compress_filter_msgs,
         );

@@ -9,6 +9,16 @@ pub(crate) enum InventoryEntry {
     Item(InventoryItem),
 }
 
+impl InventoryEntry {
+    /// Returns the entry's key
+    pub(crate) fn key(&self) -> &str {
+        match self {
+            InventoryEntry::Directory(Directory { key, .. }) => key,
+            InventoryEntry::Item(InventoryItem { key, .. }) => key.as_ref(),
+        }
+    }
+}
+
 /// An entry in an inventory list file pointing to a directory object
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct Directory {

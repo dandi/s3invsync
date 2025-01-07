@@ -5,6 +5,8 @@ In Development
 - Add `--list-dates` option
 - The `<outdir>` command-line argument is now optional and defaults to the
   current directory
+- The `--inventory-jobs` and `--object-jobs` options have been eliminated in
+  favor of a new `--jobs` option
 
 v0.1.0-alpha.2 (2025-01-06)
 ---------------------------

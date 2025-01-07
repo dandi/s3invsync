@@ -1,6 +1,6 @@
 use crate::consts::METADATA_FILENAME;
 use crate::inventory::{InventoryEntry, InventoryItem, ItemDetails};
-use crate::manifest::CsvManifest;
+use crate::manifest::{CsvManifest, FileSpec};
 use crate::s3::S3Client;
 use crate::timestamps::DateHM;
 use crate::util::*;
@@ -38,11 +38,8 @@ pub(crate) struct Syncer {
     /// The time at which the overall backup procedure started
     start_time: std::time::Instant,
 
-    /// The number of concurrent downloads of CSV inventory lists
-    inventory_jobs: NonZeroUsize,
-
-    /// The number of concurrent downloads of S3 objects
-    object_jobs: NonZeroUsize,
+    /// The number of concurrent downloads jobs
+    jobs: NonZeroUsize,
 
     /// Only download objects whose keys match the given regex
     path_filter: Option<regex::Regex>,
@@ -76,8 +73,7 @@ impl Syncer {
         outdir: PathBuf,
         manifest_date: DateHM,
         start_time: std::time::Instant,
-        inventory_jobs: NonZeroUsize,
-        object_jobs: NonZeroUsize,
+        jobs: NonZeroUsize,
         path_filter: Option<regex::Regex>,
         compress_filter_msgs: Option<NonZeroUsize>,
     ) -> Arc<Syncer> {
@@ -87,8 +83,7 @@ impl Syncer {
             outdir,
             manifest_date,
             start_time,
-            inventory_jobs,
-            object_jobs,
+            jobs,
             path_filter,
             locks: lockable::LockPool::new(),
             token: CancellationToken::new(),
@@ -111,10 +106,11 @@ impl Syncer {
             }
         });
 
+        let fspecs = self.sort_csvs_by_first_line(manifest.files).await?;
+
         tracing::trace!(path = %self.outdir.display(), "Creating root output directory");
         fs_err::create_dir_all(&self.outdir).map_err(|e| MultiError(vec![e.into()]))?;
         let mut joinset = JoinSet::new();
-        let (fspec_sender, fspec_receiver) = async_channel::bounded(CHANNEL_SIZE);
         let obj_sender = {
             let guard = self
                 .obj_sender
@@ -126,43 +122,30 @@ impl Syncer {
                 .expect("obj_sender should not be None")
         };
 
-        for _ in 0..self.inventory_jobs.get() {
-            let clnt = self.client.clone();
-            let token = self.token.clone();
-            let recv = fspec_receiver.clone();
-            let sender = obj_sender.clone();
-            joinset.spawn(async move {
-                while let Ok(fspec) = recv.recv().await {
-                    let clnt = clnt.clone();
-                    let sender = sender.clone();
-                    let r = token
-                        .run_until_cancelled(async move {
-                            let entries = clnt.download_inventory_csv(fspec).await?;
-                            for entry in entries {
-                                match entry? {
-                                    InventoryEntry::Directory(d) => {
-                                        tracing::debug!(url = %d.url(), "Ignoring directory entry in inventory list");
-                                    }
-                                    InventoryEntry::Item(item) => {
-                                        if sender.send(item).await.is_err() {
-                                            // Assume we're shutting down
-                                            return Ok(());
-                                        }
-                                    }
+        let clnt = self.client.clone();
+        let token = self.token.clone();
+        let sender = obj_sender.clone();
+        joinset.spawn(async move {
+            token.run_until_cancelled(async move {
+                for spec in fspecs {
+                    let entries = clnt.download_inventory_csv(spec).await?;
+                    for entry in entries {
+                        match entry.context("error reading from inventory list file")? {
+                            InventoryEntry::Directory(d) => {
+                                tracing::debug!(url = %d.url(), "Ignoring directory entry in inventory list");
+                            }
+                            InventoryEntry::Item(item) => {
+                                if sender.send(item).await.is_err() {
+                                    // Assume we're shutting down
+                                    return Ok(());
                                 }
                             }
-                            Ok(())
-                        })
-                        .await;
-                    match r {
-                        Some(Ok(())) => (),
-                        Some(Err(e)) => return Err(e),
-                        None => return Ok(()),
+                        }
                     }
                 }
                 Ok(())
-            });
-        }
+            }).await.unwrap_or(Ok(()))
+        });
         drop(obj_sender);
         {
             let mut guard = self
@@ -171,18 +154,8 @@ impl Syncer {
                 .expect("obj_sender mutex should not be poisoned");
             *guard = None;
         }
-        drop(fspec_receiver);
 
-        joinset.spawn(async move {
-            for fspec in manifest.files {
-                if fspec_sender.send(fspec).await.is_err() {
-                    return Ok(());
-                }
-            }
-            Ok(())
-        });
-
-        for _ in 0..self.object_jobs.get() {
+        for _ in 0..self.jobs.get() {
             let this = self.clone();
             let recv = self.obj_receiver.clone();
             joinset.spawn(async move {
@@ -196,6 +169,62 @@ impl Syncer {
             });
         }
 
+        let r = self.await_joinset(joinset).await;
+        self.filterlog.finish();
+        r
+    }
+
+    /// Fetch the first line of each inventory list file in `specs` and sort
+    /// the list by the keys in those lines
+    async fn sort_csvs_by_first_line(
+        self: &Arc<Self>,
+        specs: Vec<FileSpec>,
+    ) -> Result<Vec<FileSpec>, MultiError> {
+        tracing::info!("Peeking at inventory lists in order to sort by first line ...");
+        let mut joinset = JoinSet::new();
+        let mut receiver = {
+            let specs = Arc::new(Mutex::new(specs));
+            let (output_sender, output_receiver) = tokio::sync::mpsc::channel(CHANNEL_SIZE);
+            for _ in 0..self.jobs.get() {
+                let clnt = self.client.clone();
+                let token = self.token.clone();
+                let specs = specs.clone();
+                let sender = output_sender.clone();
+                joinset.spawn(async move {
+                    token
+                        .run_until_cancelled(async move {
+                            while let Some(fspec) = {
+                                let mut guard =
+                                    specs.lock().expect("specs mutex should not be poisoned");
+                                guard.pop()
+                            } {
+                                if let Some(entry) = clnt.peek_inventory_csv(&fspec).await? {
+                                    if sender.send((fspec, entry)).await.is_err() {
+                                        // Assume we're shutting down
+                                        return Ok(());
+                                    }
+                                }
+                            }
+                            Ok(())
+                        })
+                        .await
+                        .unwrap_or(Ok(()))
+                });
+            }
+            output_receiver
+        };
+        let mut firsts2fspecs = BTreeMap::new();
+        while let Some((fspec, entry)) = receiver.recv().await {
+            firsts2fspecs.insert(entry.key().to_owned(), fspec);
+        }
+        self.await_joinset(joinset).await?;
+        Ok(firsts2fspecs.into_values().collect())
+    }
+
+    async fn await_joinset(
+        &self,
+        mut joinset: JoinSet<anyhow::Result<()>>,
+    ) -> Result<(), MultiError> {
         let mut errors = Vec::new();
         while let Some(r) = joinset.join_next().await {
             match r {
@@ -212,8 +241,6 @@ impl Syncer {
                 Err(_) => (),
             }
         }
-        self.filterlog.finish();
-
         if self.terminated.load(Ordering::Acquire) {
             errors.push(anyhow::anyhow!("Shut down due to Ctrl-C"));
         }
@@ -224,7 +251,7 @@ impl Syncer {
         }
     }
 
-    fn shutdown(self: &Arc<Self>) {
+    fn shutdown(&self) {
         if !self.token.is_cancelled() {
             self.token.cancel();
             self.obj_receiver.close();

@@ -39,7 +39,7 @@ strum = { version = "0.26.3", features = ["derive"] }
 tempfile = "3.15.0"
 thiserror = "2.0.11"
 time = { version = "0.3.37", features = ["macros", "parsing"] }
-tokio = { version = "1.43.0", features = ["macros", "rt-multi-thread", "signal"] }
+tokio = { version = "1.43.0", features = ["macros", "rt-multi-thread", "signal", "sync"] }
 tokio-util = { version = "0.7.13", features = ["rt"] }
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.19", features = ["local-time", "time"] }
