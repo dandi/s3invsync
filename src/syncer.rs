@@ -63,9 +63,14 @@ pub(crate) struct Syncer {
 
     /// Whether the backup was terminated by Ctrl-C
     terminated: AtomicBool,
+
+    /// Object for emitting log messages about objects skipped due to
+    /// `--path-filter`
+    filterlog: FilterLogger,
 }
 
 impl Syncer {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         client: S3Client,
         outdir: PathBuf,
@@ -74,6 +79,7 @@ impl Syncer {
         inventory_jobs: NonZeroUsize,
         object_jobs: NonZeroUsize,
         path_filter: Option<regex::Regex>,
+        compress_filter_msgs: Option<NonZeroUsize>,
     ) -> Arc<Syncer> {
         let (obj_sender, obj_receiver) = async_channel::bounded(CHANNEL_SIZE);
         Arc::new(Syncer {
@@ -89,6 +95,7 @@ impl Syncer {
             obj_sender: Mutex::new(Some(obj_sender)),
             obj_receiver,
             terminated: AtomicBool::new(false),
+            filterlog: FilterLogger::new(compress_filter_msgs),
         })
     }
 
@@ -205,6 +212,7 @@ impl Syncer {
                 Err(_) => (),
             }
         }
+        self.filterlog.finish();
 
         if self.terminated.load(Ordering::Acquire) {
             errors.push(anyhow::anyhow!("Shut down due to Ctrl-C"));
@@ -228,7 +236,7 @@ impl Syncer {
     async fn process_item(&self, item: InventoryItem) -> anyhow::Result<()> {
         if let Some(ref rgx) = self.path_filter {
             if !rgx.is_match(&item.key) {
-                tracing::info!("Object key does not match --path-filter; skipping");
+                self.filterlog.log();
                 return Ok(());
             }
         }
@@ -564,5 +572,72 @@ impl<'a> MetadataManager<'a> {
             self.store(data)?;
         }
         Ok(())
+    }
+}
+
+/// An emitter of log messages about objects skipped due to `--path-filter`
+#[derive(Debug)]
+enum FilterLogger {
+    /// Log a message for every object
+    All,
+
+    /// Log one message for every `period` objects skipped
+    Compressed {
+        period: NonZeroUsize,
+        progress: Mutex<usize>,
+    },
+}
+
+impl FilterLogger {
+    fn new(compression: Option<NonZeroUsize>) -> FilterLogger {
+        if let Some(period) = compression {
+            FilterLogger::Compressed {
+                period,
+                progress: Mutex::new(0),
+            }
+        } else {
+            FilterLogger::All
+        }
+    }
+
+    /// Called whenever an object is skipped due to its key not matching
+    /// `--path-filter`.  If `self` is `All`, a log message is emitted.  If
+    /// `self` is `Compressed`, a log message is only emitted if there have
+    /// been a multiple of `period` objects skipped so far.
+    fn log(&self) {
+        match self {
+            FilterLogger::All => {
+                tracing::info!("Object key does not match --path-filter; skipping");
+            }
+            FilterLogger::Compressed { period, progress } => {
+                let new_progress = {
+                    let mut guard = progress
+                        .lock()
+                        .expect("FilterLogger mutex should not be poisoned");
+                    *guard += 1;
+                    *guard
+                };
+                if new_progress % period.get() == 0 {
+                    tracing::info!("Skipped {new_progress} keys that did not match --path-filter");
+                }
+            }
+        }
+    }
+
+    /// Called after all items have been processed.  If `self` is `Compressed`
+    /// and the number of objects skipped is not a multiple of `period`, a
+    /// message is logged for the remainder.
+    fn finish(&self) {
+        if let FilterLogger::Compressed { period, progress } = self {
+            let progress_ = {
+                let guard = progress
+                    .lock()
+                    .expect("FilterLogger mutex should not be poisoned");
+                *guard
+            };
+            if progress_ % period.get() != 0 {
+                tracing::info!("Skipped {progress_} keys that did not match --path-filter");
+            }
+        }
     }
 }
