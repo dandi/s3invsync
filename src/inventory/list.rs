@@ -2,7 +2,7 @@ use super::item::InventoryEntry;
 use crate::s3::S3Location;
 use flate2::bufread::GzDecoder;
 use std::fs::File;
-use std::io::BufReader;
+use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
 use thiserror::Error;
 
@@ -16,7 +16,7 @@ pub(crate) struct InventoryList {
     url: S3Location,
 
     /// The inner filehandle
-    inner: csv::DeserializeRecordsIntoIter<GzDecoder<BufReader<File>>, InventoryEntry>,
+    inner: CsvGzipReader<BufReader<File>>,
 }
 
 impl InventoryList {
@@ -26,10 +26,7 @@ impl InventoryList {
         InventoryList {
             path,
             url,
-            inner: csv::ReaderBuilder::new()
-                .has_headers(false)
-                .from_reader(GzDecoder::new(BufReader::new(f)))
-                .into_deserialize(),
+            inner: CsvGzipReader::new(BufReader::new(f)),
         }
     }
 }
@@ -59,4 +56,27 @@ impl Drop for InventoryList {
 pub(crate) struct InventoryListError {
     url: S3Location,
     source: csv::Error,
+}
+
+/// A struct for decoding [`InventoryEntry`]s from a reader containing gzipped
+/// CSV data
+pub(crate) struct CsvGzipReader<R>(csv::DeserializeRecordsIntoIter<GzDecoder<R>, InventoryEntry>);
+
+impl<R: BufRead> CsvGzipReader<R> {
+    pub(crate) fn new(r: R) -> Self {
+        CsvGzipReader(
+            csv::ReaderBuilder::new()
+                .has_headers(false)
+                .from_reader(GzDecoder::new(r))
+                .into_deserialize(),
+        )
+    }
+}
+
+impl<R: BufRead> Iterator for CsvGzipReader<R> {
+    type Item = Result<InventoryEntry, csv::Error>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.0.next()
+    }
 }
