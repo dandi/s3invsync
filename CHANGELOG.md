@@ -1,6 +1,7 @@
 In Development
 --------------
 - Add `--compress-filter-msgs` option
+- Support arbitrary fields in inventory lists
 
 v0.1.0-alpha.2 (2025-01-06)
 ---------------------------

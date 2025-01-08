@@ -1,13 +1,9 @@
-use crate::keypath::{KeyPath, KeyPathFromStringError};
+use crate::keypath::KeyPath;
 use crate::s3::S3Location;
-use serde::{de, Deserialize};
-use std::fmt;
-use thiserror::Error;
 use time::OffsetDateTime;
 
 /// An entry in an inventory list file
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
-#[serde(try_from = "RawInventoryEntry")]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum InventoryEntry {
     Directory(Directory),
     Item(InventoryItem),
@@ -17,14 +13,14 @@ pub(crate) enum InventoryEntry {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct Directory {
     /// The bucket on which the object is located
-    bucket: String,
+    pub(super) bucket: String,
 
     /// The object's key (ends in '/')
     // Not a KeyPath, as the key ends in '/':
-    key: String,
+    pub(super) key: String,
 
     /// The object's version ID
-    version_id: String,
+    pub(super) version_id: String,
 }
 
 impl Directory {
@@ -52,7 +48,7 @@ pub(crate) struct InventoryItem {
     pub(crate) is_latest: bool,
 
     /// The object's date of last modification
-    pub(crate) last_modified_date: OffsetDateTime,
+    pub(crate) last_modified_date: Option<OffsetDateTime>,
 
     /// Metadata about the object's content
     pub(crate) details: ItemDetails,
@@ -72,11 +68,11 @@ pub(crate) enum ItemDetails {
     /// This version of the object is not a delete marker
     Present {
         /// The object's size
-        size: i64,
+        size: Option<i64>,
         /// The object's etag
         etag: String,
-        /// Whether the object was uploaded as a multipart upload
-        is_multipart_uploaded: bool,
+        /// Whether the etag is an MD5 digest of the object's contents
+        etag_is_md5: bool,
     },
 
     /// This version of the object is a delete marker
@@ -92,7 +88,7 @@ impl ItemDetails {
         match self {
             ItemDetails::Present {
                 etag,
-                is_multipart_uploaded: false,
+                etag_is_md5: true,
                 ..
             } => Some(etag),
             _ => None,
@@ -100,137 +96,16 @@ impl ItemDetails {
     }
 }
 
-impl TryFrom<RawInventoryEntry> for InventoryEntry {
-    type Error = InventoryEntryError;
-
-    fn try_from(value: RawInventoryEntry) -> Result<InventoryEntry, InventoryEntryError> {
-        if value.key.ends_with('/')
-            && (value.is_delete_marker
-                || value.size.is_none()
-                || value.size.is_some_and(|sz| sz == 0))
-        {
-            return Ok(InventoryEntry::Directory(Directory {
-                bucket: value.bucket,
-                key: value.key,
-                version_id: value.version_id,
-            }));
-        }
-        let key = KeyPath::try_from(value.key)?;
-        if value.is_delete_marker {
-            Ok(InventoryEntry::Item(InventoryItem {
-                bucket: value.bucket,
-                key,
-                version_id: value.version_id,
-                is_latest: value.is_latest,
-                last_modified_date: value.last_modified_date,
-                details: ItemDetails::Deleted,
-            }))
-        } else {
-            let Some(size) = value.size else {
-                return Err(InventoryEntryError::Size(key));
-            };
-            let Some(etag) = value.etag else {
-                return Err(InventoryEntryError::Etag(key));
-            };
-            let Some(is_multipart_uploaded) = value.is_multipart_uploaded else {
-                return Err(InventoryEntryError::Multipart(key));
-            };
-            Ok(InventoryEntry::Item(InventoryItem {
-                bucket: value.bucket,
-                key,
-                version_id: value.version_id,
-                is_latest: value.is_latest,
-                last_modified_date: value.last_modified_date,
-                details: ItemDetails::Present {
-                    size,
-                    etag,
-                    is_multipart_uploaded,
-                },
-            }))
-        }
-    }
-}
-
-/// Error returned when parsing an inventory entry fails
-#[derive(Clone, Debug, Eq, Error, PartialEq)]
-pub(crate) enum InventoryEntryError {
-    /// The entry was not a delete marker and lacked a size
-    #[error("non-deleted inventory item {0:?} lacks size")]
-    Size(KeyPath),
-
-    /// The entry was not a delete marker and lacked an etag
-    #[error("non-deleted inventory item {0:?} lacks etag")]
-    Etag(KeyPath),
-
-    /// The entry was not a delete marker and lacked an is-multipart-uploaded
-    /// field
-    #[error("non-deleted inventory item {0:?} lacks is-multipart-uploaded field")]
-    Multipart(KeyPath),
-
-    /// The key was not an acceptable filepath
-    // Serde (CSV?) errors don't show sources, so we need to include them
-    // manually:
-    #[error("inventory item key is not an acceptable filepath: {0}")]
-    KeyPath(#[from] KeyPathFromStringError),
-}
-
-/// An entry directly parsed from an inventory list
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
-struct RawInventoryEntry {
-    // IMPORTANT: The order of the fields must match that in
-    // `EXPECTED_FILE_SCHEMA` in `manifest.rs`
-    bucket: String,
-    #[serde(deserialize_with = "percent_decode")]
-    key: String,
-    version_id: String,
-    is_latest: bool,
-    is_delete_marker: bool,
-    size: Option<i64>,
-    #[serde(with = "time::serde::rfc3339")]
-    last_modified_date: OffsetDateTime,
-    etag: Option<String>,
-    is_multipart_uploaded: Option<bool>,
-}
-
-/// Deserialize a percent-encoded string
-fn percent_decode<'de, D>(deserializer: D) -> Result<String, D::Error>
-where
-    D: de::Deserializer<'de>,
-{
-    struct Visitor;
-
-    impl de::Visitor<'_> for Visitor {
-        type Value = String;
-
-        fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-            formatter.write_str("a percent-encoded UTF-8 string")
-        }
-
-        fn visit_str<E>(self, input: &str) -> Result<Self::Value, E>
-        where
-            E: de::Error,
-        {
-            percent_encoding::percent_decode_str(input)
-                .decode_utf8()
-                .map(std::borrow::Cow::into_owned)
-                .map_err(|_| E::invalid_value(de::Unexpected::Str(input), &self))
-        }
-    }
-
-    deserializer.deserialize_str(Visitor)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::inventory::{CsvReader, FileSchema};
     use assert_matches::assert_matches;
     use time::macros::datetime;
 
     fn parse_csv(s: &str) -> InventoryEntry {
-        csv::ReaderBuilder::new()
-            .has_headers(false)
-            .from_reader(std::io::Cursor::new(s))
-            .deserialize()
+        let file_schema = "Bucket, Key, VersionId, IsLatest, IsDeleteMarker, Size, LastModifiedDate, ETag, IsMultipartUploaded".parse::<FileSchema>().unwrap();
+        CsvReader::new(s.as_bytes(), file_schema)
             .next()
             .unwrap()
             .unwrap()
@@ -249,13 +124,13 @@ mod tests {
             );
             assert_eq!(item.version_id, "nuYD8l5blCvLV3DbAiN1IXuwo7aF3F98");
             assert!(item.is_latest);
-            assert_eq!(item.last_modified_date, datetime!(2022-12-12 13:20:39 UTC));
+            assert_eq!(item.last_modified_date, Some(datetime!(2022-12-12 13:20:39 UTC)));
             assert_eq!(
                 item.details,
                 ItemDetails::Present {
-                    size: 1511723,
+                    size: Some(1511723),
                     etag: "627c47efe292876b91978324485cd2ec".into(),
-                    is_multipart_uploaded: false
+                    etag_is_md5: true,
                 }
             );
         });
@@ -274,7 +149,7 @@ mod tests {
             );
             assert_eq!(item.version_id, "t5w9XO56_Yi1eF6HE7KUgoLumufisMyo");
             assert!(!item.is_latest);
-            assert_eq!(item.last_modified_date, datetime!(2022-12-11 17:55:08 UTC));
+            assert_eq!(item.last_modified_date, Some(datetime!(2022-12-11 17:55:08 UTC)));
             assert_eq!(item.details, ItemDetails::Deleted);
         });
     }
@@ -292,13 +167,13 @@ mod tests {
             );
             assert_eq!(item.version_id, "t4Z7oFATOK2678GfaU8oLcjWDMAS0RgK");
             assert!(item.is_latest);
-            assert_eq!(item.last_modified_date, datetime!(2024-05-07 21:12:55 UTC));
+            assert_eq!(item.last_modified_date, Some(datetime!(2024-05-07 21:12:55 UTC)));
             assert_eq!(
                 item.details,
                 ItemDetails::Present {
-                    size: 38129,
+                    size: Some(38129),
                     etag: "f58c1f0e5fb20a9152788f825375884a".into(),
-                    is_multipart_uploaded: false,
+                    etag_is_md5: true,
                 }
             );
         });

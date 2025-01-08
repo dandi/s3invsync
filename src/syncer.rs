@@ -380,8 +380,10 @@ impl Syncer {
                         path.display()
                     )
                 })?;
-                fp.set_modified(item.last_modified_date.into())
-                    .with_context(|| format!("failed to set mtime on {}", path.display()))?;
+                if let Some(mtime) = item.last_modified_date {
+                    fp.set_modified(mtime.into())
+                        .with_context(|| format!("failed to set mtime on {}", path.display()))?;
+                }
                 Ok(true)
             }
             Some(Err(e)) => {

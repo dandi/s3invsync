@@ -3,7 +3,7 @@ mod location;
 mod streams;
 pub(crate) use self::location::S3Location;
 use self::streams::{ListManifestDates, ListObjectsError};
-use crate::inventory::InventoryList;
+use crate::inventory::{CsvReader, InventoryList};
 use crate::manifest::{CsvManifest, FileSpec};
 use crate::timestamps::{Date, DateHM, DateMaybeHM};
 use aws_credential_types::{
@@ -231,7 +231,8 @@ impl S3Client {
                 url: url.clone(),
                 source,
             })?;
-        Ok(InventoryList::from_gzip_csv_file(path, url, outfile))
+        let reader = CsvReader::from_gzipped_reader(BufReader::new(outfile), fspec.file_schema);
+        Ok(InventoryList::for_downloaded_csv(path, url, reader))
     }
 
     /// Download the object at `url` and write its bytes to `outfile`.  If

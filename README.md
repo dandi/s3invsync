@@ -13,18 +13,8 @@ making use of the bucket's [Amazon S3 Inventory][inv] files.
 [inv]: https://docs.aws.amazon.com/AmazonS3/latest/userguide/storage-inventory.html
 
 Currently, only versioned buckets and S3 Inventories with CSV output files are
-supported, and the CSVs are required to have exactly the following fields, in
-order:
-
-- `Bucket`
-- `Key`
-- `VersionId`
-- `IsLatest`
-- `IsDeleteMarker`
-- `Size`
-- `LastModifiedDate`
-- `ETag`
-- `IsMultipartUploaded`
+supported, and the CSVs are required to list at least the `Bucket`, `Key`,
+`VersionId`, and `ETag` fields.
 
 **Warning:** This is an in-development program.  They may be bugs, and some
 planned features have not been implemented yet.

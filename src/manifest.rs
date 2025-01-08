@@ -1,26 +1,32 @@
+use crate::inventory::FileSchema;
 use serde::Deserialize;
 use thiserror::Error;
 
-/// Currently, only manifests with this exact fileSchema value are supported.
-static EXPECTED_FILE_SCHEMA: &str = "Bucket, Key, VersionId, IsLatest, IsDeleteMarker, Size, LastModifiedDate, ETag, IsMultipartUploaded";
-
 /// A listing of CSV inventory files from a manifest
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
-#[serde(try_from = "Manifest")]
+#[serde(try_from = "RawManifest")]
 pub(crate) struct CsvManifest {
     pub(crate) files: Vec<FileSpec>,
 }
 
-impl TryFrom<Manifest> for CsvManifest {
+impl TryFrom<RawManifest> for CsvManifest {
     type Error = ManifestError;
 
-    fn try_from(value: Manifest) -> Result<CsvManifest, ManifestError> {
+    fn try_from(value: RawManifest) -> Result<CsvManifest, ManifestError> {
         if value.file_format != FileFormat::Csv {
             Err(ManifestError::Format(value.file_format))
-        } else if value.file_schema != EXPECTED_FILE_SCHEMA {
-            Err(ManifestError::Schema(value.file_schema))
         } else {
-            Ok(CsvManifest { files: value.files })
+            let files = value
+                .files
+                .into_iter()
+                .map(|spec| FileSpec {
+                    key: spec.key,
+                    size: spec.size,
+                    md5_checksum: spec.md5_checksum,
+                    file_schema: value.file_schema.clone(),
+                })
+                .collect();
+            Ok(CsvManifest { files })
         }
     }
 }
@@ -32,23 +38,19 @@ pub(crate) enum ManifestError {
     /// CSV
     #[error("inventory files are in {0:?} format; only CSV is supported")]
     Format(FileFormat),
-
-    /// Returned when a manifest's fileSchema is not the supported value
-    #[error("inventory schema is unsupported {0:?}; expected {EXPECTED_FILE_SCHEMA:?}")]
-    Schema(String),
 }
 
 /// Parsed `manifest.json` file
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase")]
-struct Manifest {
+struct RawManifest {
     //source_bucket: String,
     //destination_bucket: String,
     //version: String,
     //creation_timestamp: String,
     file_format: FileFormat,
-    file_schema: String,
-    files: Vec<FileSpec>,
+    file_schema: FileSchema,
+    files: Vec<RawFileSpec>,
 }
 
 /// The possible inventory list file formats
@@ -63,8 +65,25 @@ pub(crate) enum FileFormat {
 }
 
 /// An entry in a manifest's "files" list pointing to an inventory list file
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct FileSpec {
+    /// S3 object key of the inventory list file
+    pub(crate) key: String,
+
+    /// Size of the inventory list file
+    pub(crate) size: i64,
+
+    /// MD5 digest of the inventory list file
+    pub(crate) md5_checksum: String,
+
+    /// The fields used by the inventory list file
+    pub(crate) file_schema: FileSchema,
+}
+
+/// An entry in a manifest's "files" list pointing to an inventory list file,
+/// as deserialized directly from a manifest
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+pub(crate) struct RawFileSpec {
     /// S3 object key of the inventory list file
     pub(crate) key: String,
 
