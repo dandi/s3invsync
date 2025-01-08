@@ -23,6 +23,11 @@ use tracing_subscriber::{filter::Targets, fmt::time::OffsetTime, prelude::*};
 #[derive(Clone, Debug, Parser)]
 #[command(version = env!("VERSION_WITH_GIT"))]
 struct Arguments {
+    /// Instead of emitting a log message for each object skipped by
+    /// `--path-filter`, emit one message for every `N` objects skipped.
+    #[arg(long, value_name = "N")]
+    compress_filter_msgs: Option<NonZeroUsize>,
+
     /// Download objects from the inventory created at the given date.
     ///
     /// By default, the most recent inventory is downloaded.
@@ -116,6 +121,7 @@ async fn run(args: Arguments) -> anyhow::Result<()> {
         args.inventory_jobs,
         args.object_jobs,
         args.path_filter,
+        args.compress_filter_msgs,
     );
     tracing::info!("Starting backup ...");
     syncer.run(manifest).await?;

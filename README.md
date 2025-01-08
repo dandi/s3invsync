@@ -66,6 +66,10 @@ directory.  Each non-latest, non-deleted version of a given key is stored at
 Options
 -------
 
+- `--compress-filter-msgs <N>` — Instead of emitting a log message for each
+  object skipped by `--path-filter`, emit one message for every `<N>` objects
+  skipped.
+
 - `-d <DATE>`, `--date <DATE>` — Download objects from the inventory created at
   the given date.
 

@@ -1,3 +1,7 @@
+In Development
+--------------
+- Add `--compress-filter-msgs` option
+
 v0.1.0-alpha.2 (2025-01-06)
 ---------------------------
 - After fully scanning an inventory list CSV file, delete it
