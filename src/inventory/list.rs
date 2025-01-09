@@ -1,8 +1,9 @@
+use super::fields::{FileSchema, ParseEntryError};
 use super::item::InventoryEntry;
 use crate::s3::S3Location;
 use flate2::bufread::GzDecoder;
 use std::fs::File;
-use std::io::BufReader;
+use std::io::{BufRead, BufReader, Read};
 use std::path::PathBuf;
 use thiserror::Error;
 
@@ -16,21 +17,18 @@ pub(crate) struct InventoryList {
     url: S3Location,
 
     /// The inner filehandle
-    inner: csv::DeserializeRecordsIntoIter<GzDecoder<BufReader<File>>, InventoryEntry>,
+    inner: CsvReader<GzDecoder<BufReader<File>>>,
 }
 
 impl InventoryList {
-    /// Construct an `InventoryList` from a local file handle `f` at path
-    /// `path`, downloaded from `url`
-    pub(crate) fn from_gzip_csv_file(path: PathBuf, url: S3Location, f: File) -> InventoryList {
-        InventoryList {
-            path,
-            url,
-            inner: csv::ReaderBuilder::new()
-                .has_headers(false)
-                .from_reader(GzDecoder::new(BufReader::new(f)))
-                .into_deserialize(),
-        }
+    /// Construct an `InventoryList` from a `CsvReader` reading from the file
+    /// at path `path` that was downloaded from `url`
+    pub(crate) fn for_downloaded_csv(
+        path: PathBuf,
+        url: S3Location,
+        inner: CsvReader<GzDecoder<BufReader<File>>>,
+    ) -> InventoryList {
+        InventoryList { path, url, inner }
     }
 }
 
@@ -58,5 +56,51 @@ impl Drop for InventoryList {
 #[error("failed to read entry from inventory list at {url}")]
 pub(crate) struct InventoryListError {
     url: S3Location,
-    source: csv::Error,
+    source: CsvReaderError,
+}
+
+/// A struct for decoding [`InventoryEntry`]s from a reader containing CSV data
+pub(crate) struct CsvReader<R> {
+    inner: csv::DeserializeRecordsIntoIter<R, Vec<String>>,
+    file_schema: FileSchema,
+}
+
+impl<R: Read> CsvReader<R> {
+    pub(crate) fn new(r: R, file_schema: FileSchema) -> Self {
+        CsvReader {
+            inner: csv::ReaderBuilder::new()
+                .has_headers(false)
+                .from_reader(r)
+                .into_deserialize(),
+            file_schema,
+        }
+    }
+}
+
+impl<R: BufRead> CsvReader<GzDecoder<R>> {
+    pub(crate) fn from_gzipped_reader(r: R, file_schema: FileSchema) -> Self {
+        CsvReader::new(GzDecoder::new(r), file_schema)
+    }
+}
+
+impl<R: Read> Iterator for CsvReader<R> {
+    type Item = Result<InventoryEntry, CsvReaderError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self.inner.next()? {
+            Ok(values) => match self.file_schema.parse_csv_fields(values) {
+                Ok(entry) => Some(Ok(entry)),
+                Err(e) => Some(Err(e.into())),
+            },
+            Err(e) => Some(Err(e.into())),
+        }
+    }
+}
+
+#[derive(Debug, Error)]
+pub(crate) enum CsvReaderError {
+    #[error("failed to read entry from CSV file")]
+    Csv(#[from] csv::Error),
+    #[error("failed to parse fields of CSV entry")]
+    Parse(#[from] ParseEntryError),
 }

@@ -1,6 +1,7 @@
 In Development
 --------------
 - Add `--compress-filter-msgs` option
+- Support all documented S3 Inventory fields in inventory lists
 
 v0.1.0-alpha.2 (2025-01-06)
 ---------------------------
