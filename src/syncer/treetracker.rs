@@ -382,6 +382,15 @@ mod tests {
         assert_eq!(dirs.len(), 1);
         assert_eq!(dirs[0].path(), Some("foo"));
         assert_eq!(dirs[0].entries, vec![Entry::file("bar.txt", 1)]);
+        let dirs = tracker.finish();
+        assert_eq!(dirs.len(), 2);
+        assert_eq!(dirs[0].path(), Some("glarch"));
+        assert_eq!(dirs[0].entries, vec![Entry::file("quux.txt", 2)]);
+        assert_eq!(dirs[1].path(), None);
+        assert_eq!(
+            dirs[1].entries,
+            vec![Entry::dir("foo"), Entry::dir("glarch")]
+        );
     }
 
     #[test]
@@ -397,10 +406,18 @@ mod tests {
         assert_eq!(dirs.len(), 1);
         assert_eq!(dirs[0].path(), Some("foo/bar"));
         assert_eq!(dirs[0].entries, vec![Entry::file("apple.txt", 1)]);
+        let dirs = tracker.finish();
+        assert_eq!(dirs.len(), 3);
+        assert_eq!(dirs[0].path(), Some("foo/quux"));
+        assert_eq!(dirs[0].entries, vec![Entry::file("banana.txt", 2)]);
+        assert_eq!(dirs[1].path(), Some("foo"));
+        assert_eq!(dirs[1].entries, vec![Entry::dir("bar"), Entry::dir("quux")]);
+        assert_eq!(dirs[2].path(), None);
+        assert_eq!(dirs[2].entries, vec![Entry::dir("foo")]);
     }
 
     #[test]
-    fn preslash_dir() {
+    fn preslash_dir_then_toslash_dir() {
         let mut tracker = TreeTracker::new();
         assert_eq!(
             tracker.add(
@@ -415,13 +432,24 @@ mod tests {
         assert_eq!(dirs.len(), 1);
         assert_eq!(dirs[0].path(), Some("foo/apple!banana"));
         assert_eq!(dirs[0].entries, vec![Entry::file("gnusto.txt", 1)]);
+        let dirs = tracker.finish();
+        assert_eq!(dirs.len(), 3);
+        assert_eq!(dirs[0].path(), Some("foo/apple"));
+        assert_eq!(dirs[0].entries, vec![Entry::file("cleesh.txt", 2)]);
+        assert_eq!(dirs[1].path(), Some("foo"));
+        assert_eq!(
+            dirs[1].entries,
+            vec![Entry::dir("apple!banana"), Entry::dir("apple")]
+        );
+        assert_eq!(dirs[2].path(), None);
+        assert_eq!(dirs[2].entries, vec![Entry::dir("foo")]);
     }
 
     #[test]
-    fn preslash_file() {
+    fn preslash_file_then_toslash_file() {
         let mut tracker = TreeTracker::new();
         assert_eq!(
-            tracker.add(&"foo/bar/apple!banana.txt".parse::<KeyPath>().unwrap(), 1,),
+            tracker.add(&"foo/bar/apple!banana.txt".parse::<KeyPath>().unwrap(), 1),
             Ok(Vec::new())
         );
         let e = tracker
@@ -437,16 +465,151 @@ mod tests {
     }
 
     #[test]
-    fn preslash_file_rev() {
+    fn tostash_file_then_preslash_file() {
         let mut tracker = TreeTracker::new();
         assert_eq!(
-            tracker.add(&"foo/bar/apple".parse::<KeyPath>().unwrap(), 1,),
+            tracker.add(&"foo/bar/apple".parse::<KeyPath>().unwrap(), 1),
             Ok(Vec::new())
         );
         assert_eq!(
             tracker.add(&"foo/bar/apple!banana.txt".parse::<KeyPath>().unwrap(), 2),
             Ok(Vec::new())
         );
+        let dirs = tracker.finish();
+        assert_eq!(dirs.len(), 3);
+        assert_eq!(dirs[0].path(), Some("foo/bar"));
+        assert_eq!(
+            dirs[0].entries,
+            vec![Entry::file("apple", 1), Entry::file("apple!banana.txt", 2)]
+        );
+        assert_eq!(dirs[1].path(), Some("foo"));
+        assert_eq!(dirs[1].entries, vec![Entry::dir("bar")]);
+        assert_eq!(dirs[2].path(), None);
+        assert_eq!(dirs[2].entries, vec![Entry::dir("foo")]);
+    }
+
+    #[test]
+    fn preslash_dir_then_toslash_file() {
+        let mut tracker = TreeTracker::new();
+        assert_eq!(
+            tracker.add(
+                &"foo/apple!banana/gnusto.txt".parse::<KeyPath>().unwrap(),
+                1,
+            ),
+            Ok(Vec::new())
+        );
+        let e = tracker
+            .add(&"foo/apple".parse::<KeyPath>().unwrap(), 2)
+            .unwrap_err();
+        assert_eq!(
+            e,
+            TreeTrackerError::Unsorted {
+                before: "foo/apple!banana/gnusto.txt".into(),
+                after: "foo/apple".into()
+            }
+        );
+    }
+
+    #[test]
+    fn preslash_file_then_toslash_dir() {
+        let mut tracker = TreeTracker::new();
+        assert_eq!(
+            tracker.add(&"foo/bar/apple!banana.txt".parse::<KeyPath>().unwrap(), 1),
+            Ok(Vec::new())
+        );
+        assert_eq!(
+            tracker.add(&"foo/bar/apple/apricot.txt".parse::<KeyPath>().unwrap(), 2),
+            Ok(Vec::new())
+        );
+        let dirs = tracker.finish();
+        assert_eq!(dirs.len(), 4);
+        assert_eq!(dirs[0].path(), Some("foo/bar/apple"));
+        assert_eq!(dirs[0].entries, vec![Entry::file("apricot.txt", 2)]);
+        assert_eq!(dirs[1].path(), Some("foo/bar"));
+        assert_eq!(
+            dirs[1].entries,
+            vec![Entry::file("apple!banana.txt", 1), Entry::dir("apple")]
+        );
+        assert_eq!(dirs[2].path(), Some("foo"));
+        assert_eq!(dirs[2].entries, vec![Entry::dir("bar")]);
+        assert_eq!(dirs[3].path(), None);
+        assert_eq!(dirs[3].entries, vec![Entry::dir("foo")]);
+    }
+
+    #[test]
+    fn path_conflict_file_then_dir() {
+        let mut tracker = TreeTracker::new();
+        assert_eq!(
+            tracker.add(&"foo/bar".parse::<KeyPath>().unwrap(), 1),
+            Ok(Vec::new())
+        );
+        let e = tracker
+            .add(&"foo/bar/apple.txt".parse::<KeyPath>().unwrap(), 2)
+            .unwrap_err();
+        assert_eq!(e, TreeTrackerError::Conflict("foo/bar".into()));
+    }
+
+    #[test]
+    fn just_finish() {
+        let tracker = TreeTracker::<()>::new();
+        let dirs = tracker.finish();
+        assert_eq!(dirs.len(), 1);
+        assert_eq!(dirs[0].path(), None);
+        assert!(dirs[0].entries.is_empty());
+    }
+
+    #[test]
+    fn multidir_finish() {
+        let mut tracker = TreeTracker::new();
+        assert_eq!(
+            tracker.add(
+                &"apple/banana/coconut/date.txt".parse::<KeyPath>().unwrap(),
+                1
+            ),
+            Ok(Vec::new())
+        );
+        let dirs = tracker.finish();
+        assert_eq!(dirs.len(), 4);
+        assert_eq!(dirs[0].path(), Some("apple/banana/coconut"));
+        assert_eq!(dirs[0].entries, vec![Entry::file("date.txt", 1)]);
+        assert_eq!(dirs[1].path(), Some("apple/banana"));
+        assert_eq!(dirs[1].entries, vec![Entry::dir("coconut")]);
+        assert_eq!(dirs[2].path(), Some("apple"));
+        assert_eq!(dirs[2].entries, vec![Entry::dir("banana")]);
+        assert_eq!(dirs[3].path(), None);
+        assert_eq!(dirs[3].entries, vec![Entry::dir("apple")]);
+    }
+
+    #[test]
+    fn closedir_then_files_in_parent() {
+        let mut tracker = TreeTracker::new();
+        assert_eq!(
+            tracker.add(&"apple/banana/coconut.txt".parse::<KeyPath>().unwrap(), 1),
+            Ok(Vec::new())
+        );
+        let dirs = tracker
+            .add(&"apple/kumquat.txt".parse::<KeyPath>().unwrap(), 2)
+            .unwrap();
+        assert_eq!(dirs.len(), 1);
+        assert_eq!(dirs[0].path(), Some("apple/banana"));
+        assert_eq!(dirs[0].entries, vec![Entry::file("coconut.txt", 1)]);
+        assert_eq!(
+            tracker.add(&"apple/mango.txt".parse::<KeyPath>().unwrap(), 3),
+            Ok(Vec::new())
+        );
+        let dirs = tracker.finish();
+        assert_eq!(dirs.len(), 2);
+        assert_eq!(dirs[0].path(), Some("apple"));
+        assert_eq!(
+            dirs[0].entries,
+            vec![
+                Entry::dir("banana"),
+                Entry::file("kumquat.txt", 2),
+                Entry::file("mango.txt", 3),
+            ]
+        );
+        assert_eq!(dirs[1].path(), None);
+        assert_eq!(dirs[1].entries, vec![Entry::dir("apple")]);
     }
 
     mod cmp_name {
@@ -480,15 +643,8 @@ mod tests {
 }
 
 // TESTS TO ADD:
-// - "pre-slash" directory followed by file cut off at pre-slash → error
-// - "pre-slash" file followed by directory with `/` at pre-slash location →
-//   success
-// - path is both a file and a directory → error
 // - second path closes multiple directories
 // - close multiple directories down to root
-// - finish() when multiple directories are open
-// - finish() without calling add()
-// - close a subdirectory, continue on with parent dir
+// - close a subdirectory, then start a new directory in its parent
 // - close a directory in the root, continue on
 // - mix of files & directories in a directory
-// - working with *.old.*.* filenames, especially ones out of order
