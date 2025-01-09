@@ -1,7 +1,10 @@
 mod metadata;
+mod treetracker;
 use self::metadata::*;
+use self::treetracker::*;
 use crate::consts::METADATA_FILENAME;
 use crate::inventory::{InventoryEntry, InventoryItem, ItemDetails};
+use crate::keypath::is_special_component;
 use crate::manifest::{CsvManifest, FileSpec};
 use crate::s3::S3Client;
 use crate::timestamps::DateHM;
@@ -123,19 +126,26 @@ impl Syncer {
                 .expect("obj_sender should not be None")
         };
 
-        let clnt = self.client.clone();
+        let this = self.clone();
         let token = self.token.clone();
         let sender = obj_sender.clone();
         joinset.spawn(async move {
             token.run_until_cancelled(async move {
+                let mut tracker = TreeTracker::new();
                 for spec in fspecs {
-                    let entries = clnt.download_inventory_csv(spec).await?;
+                    let entries = this.client.download_inventory_csv(spec).await?;
                     for entry in entries {
                         match entry.context("error reading from inventory list file")? {
                             InventoryEntry::Directory(d) => {
                                 tracing::debug!(url = %d.url(), "Ignoring directory entry in inventory list");
                             }
                             InventoryEntry::Item(item) => {
+                                // TODO: Store a Cond for awaiting completion of item processing
+                                for dir in tracker.add(&item.key, ())? {
+                                    // TODO: Spawn in JoinSet
+                                    let this2 = this.clone();
+                                    tokio::task::spawn_blocking(move || this2.cleanup_dir(dir));
+                                }
                                 if sender.send(item).await.is_err() {
                                     // Assume we're shutting down
                                     return Ok(());
@@ -143,6 +153,11 @@ impl Syncer {
                             }
                         }
                     }
+                }
+                for dir in tracker.finish() {
+                    // TODO: Spawn in JoinSet
+                    let this2 = this.clone();
+                    tokio::task::spawn_blocking(move || this2.cleanup_dir(dir));
                 }
                 Ok(())
             }).await.unwrap_or(Ok(()))
@@ -471,6 +486,52 @@ impl Syncer {
             virtual_mem,
             "Process info",
         );
+    }
+
+    fn cleanup_dir(&self, dir: Directory<()>) -> anyhow::Result<()> {
+        // TODO: Wait for directory's jobs to finish
+        let dirpath = match dir.path() {
+            Some(p) => self.outdir.join(p),
+            None => self.outdir.clone(),
+        };
+        let mut dbdeletions = Vec::new();
+        for entry in fs_err::read_dir(&dirpath)? {
+            let entry = entry?;
+            let epath = entry.path();
+            let is_dir = entry.file_type()?.is_dir();
+            let to_delete = match entry.file_name().to_str() {
+                Some(name) => {
+                    if is_dir {
+                        !dir.contains_dir(name)
+                    } else {
+                        if !is_special_component(name) {
+                            dbdeletions.push(name.to_owned());
+                        }
+                        !dir.contains_file(name) && name != METADATA_FILENAME
+                    }
+                }
+                None => true,
+            };
+            if to_delete {
+                // TODO: Log
+                if is_dir {
+                    // TODO: Use async here?
+                    fs_err::remove_dir_all(&epath)?;
+                } else {
+                    fs_err::remove_file(&epath)?;
+                }
+            }
+        }
+        if !dbdeletions.is_empty() {
+            // TODO: Log
+            let manager = MetadataManager::new(&dirpath);
+            let mut data = manager.load()?;
+            for name in dbdeletions {
+                data.remove(&name);
+            }
+            manager.store(data)?;
+        }
+        Ok(())
     }
 }
 

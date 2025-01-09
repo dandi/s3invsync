@@ -1796,6 +1796,7 @@ dependencies = [
  "aws-smithy-runtime-api",
  "clap",
  "csv",
+ "either",
  "flate2",
  "fs-err",
  "futures-util",

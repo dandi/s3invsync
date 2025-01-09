@@ -109,7 +109,7 @@ impl<'a> MetadataManager<'a> {
 
     /// Read & parse the database file.  If the file does not exist, return an
     /// empty map.
-    fn load(&self) -> anyhow::Result<BTreeMap<String, Metadata>> {
+    pub(super) fn load(&self) -> anyhow::Result<BTreeMap<String, Metadata>> {
         let content = match fs_err::read_to_string(&self.database_path) {
             Ok(content) => content,
             Err(e) if e.kind() == ErrorKind::NotFound => String::from("{}"),
@@ -124,7 +124,7 @@ impl<'a> MetadataManager<'a> {
     }
 
     /// Set the content of the database file to the serialized map
-    fn store(&self, data: BTreeMap<String, Metadata>) -> anyhow::Result<()> {
+    pub(super) fn store(&self, data: BTreeMap<String, Metadata>) -> anyhow::Result<()> {
         let fp = tempfile::Builder::new()
             .prefix(".s3invsync.versions.")
             .tempfile_in(self.dirpath)
