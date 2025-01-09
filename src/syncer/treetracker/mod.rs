@@ -48,7 +48,7 @@ impl<T> TreeTracker<T> {
                             break;
                         }
                         (true, Some(Ordering::Equal)) => {
-                            return Err(TreeTrackerError::Conflict(self.last_key()));
+                            return Err(TreeTrackerError::Conflict(key.into()));
                         }
                         (false, Some(Ordering::Equal)) => {
                             // XXX: Change this when support for old filenames is
@@ -478,6 +478,19 @@ mod tests {
     }
 
     #[test]
+    fn path_conflict_dir_then_file() {
+        let mut tracker = TreeTracker::new();
+        assert_eq!(
+            tracker.add(&"foo/bar/quux.txt".parse::<KeyPath>().unwrap(), 1),
+            Ok(Vec::new())
+        );
+        let e = tracker
+            .add(&"foo/bar".parse::<KeyPath>().unwrap(), 2)
+            .unwrap_err();
+        assert_eq!(e, TreeTrackerError::Conflict("foo/bar".into()));
+    }
+
+    #[test]
     fn just_finish() {
         let tracker = TreeTracker::<()>::new();
         let dirs = tracker.finish();
@@ -539,12 +552,153 @@ mod tests {
         assert_eq!(dirs[1].path(), None);
         assert_eq!(dirs[1].entries, vec![Entry::dir("apple")]);
     }
-}
 
-// TESTS TO ADD:
-// - second path closes multiple directories
-// - close multiple directories down to root
-// - close a subdirectory, then start a new directory in its parent
-// - close a directory in the root, continue on
-// - mix of files & directories in a directory
-// - file in root dir (with & without preceding entries)
+    #[test]
+    fn closedir_then_dirs_in_parent() {
+        let mut tracker = TreeTracker::new();
+        assert_eq!(
+            tracker.add(&"apple/banana/coconut.txt".parse::<KeyPath>().unwrap(), 1),
+            Ok(Vec::new())
+        );
+        let dirs = tracker
+            .add(&"apple/eggplant/kumquat.txt".parse::<KeyPath>().unwrap(), 2)
+            .unwrap();
+        assert_eq!(dirs.len(), 1);
+        assert_eq!(dirs[0].path(), Some("apple/banana"));
+        assert_eq!(dirs[0].entries, vec![Entry::file("coconut.txt", 1)]);
+        let dirs = tracker
+            .add(&"apple/mango/tangerine.txt".parse::<KeyPath>().unwrap(), 3)
+            .unwrap();
+        assert_eq!(dirs.len(), 1);
+        assert_eq!(dirs[0].path(), Some("apple/eggplant"));
+        assert_eq!(dirs[0].entries, vec![Entry::file("kumquat.txt", 2)]);
+        let dirs = tracker.finish();
+        assert_eq!(dirs.len(), 3);
+        assert_eq!(dirs[0].path(), Some("apple/mango"));
+        assert_eq!(dirs[0].entries, vec![Entry::file("tangerine.txt", 3)]);
+        assert_eq!(dirs[1].path(), Some("apple"));
+        assert_eq!(
+            dirs[1].entries,
+            vec![
+                Entry::dir("banana"),
+                Entry::dir("eggplant"),
+                Entry::dir("mango"),
+            ]
+        );
+        assert_eq!(dirs[2].path(), None);
+        assert_eq!(dirs[2].entries, vec![Entry::dir("apple")]);
+    }
+
+    #[test]
+    fn close_multiple_dirs() {
+        let mut tracker = TreeTracker::new();
+        assert_eq!(
+            tracker.add(
+                &"apple/banana/coconut/date.txt".parse::<KeyPath>().unwrap(),
+                1
+            ),
+            Ok(Vec::new())
+        );
+        let dirs = tracker
+            .add(&"foo.txt".parse::<KeyPath>().unwrap(), 2)
+            .unwrap();
+        assert_eq!(dirs.len(), 3);
+        assert_eq!(dirs[0].path(), Some("apple/banana/coconut"));
+        assert_eq!(dirs[0].entries, vec![Entry::file("date.txt", 1)]);
+        assert_eq!(dirs[1].path(), Some("apple/banana"));
+        assert_eq!(dirs[1].entries, vec![Entry::dir("coconut")]);
+        assert_eq!(dirs[2].path(), Some("apple"));
+        assert_eq!(dirs[2].entries, vec![Entry::dir("banana")]);
+        let dirs = tracker.finish();
+        assert_eq!(dirs.len(), 1);
+        assert_eq!(dirs[0].path(), None);
+        assert_eq!(
+            dirs[0].entries,
+            vec![Entry::dir("apple"), Entry::file("foo.txt", 2)]
+        );
+    }
+
+    #[test]
+    fn same_file_twice() {
+        let mut tracker = TreeTracker::new();
+        assert_eq!(
+            tracker.add(&"foo/bar/quux.txt".parse::<KeyPath>().unwrap(), 1),
+            Ok(Vec::new())
+        );
+        let e = tracker
+            .add(&"foo/bar/quux.txt".parse::<KeyPath>().unwrap(), 2)
+            .unwrap_err();
+        assert_eq!(
+            e,
+            TreeTrackerError::DuplicateFile("foo/bar/quux.txt".into())
+        );
+    }
+
+    #[test]
+    fn unsorted_parent_dirs() {
+        let mut tracker = TreeTracker::new();
+        assert_eq!(
+            tracker.add(&"foo/gnusto/quux.txt".parse::<KeyPath>().unwrap(), 1),
+            Ok(Vec::new())
+        );
+        let e = tracker
+            .add(&"foo/bar/cleesh.txt".parse::<KeyPath>().unwrap(), 2)
+            .unwrap_err();
+        assert_eq!(
+            e,
+            TreeTrackerError::Unsorted {
+                before: "foo/gnusto/quux.txt".into(),
+                after: "foo/bar/cleesh.txt".into()
+            }
+        );
+    }
+
+    #[test]
+    fn file_then_preceding_dir() {
+        let mut tracker = TreeTracker::new();
+        assert_eq!(
+            tracker.add(&"foo/gnusto.txt".parse::<KeyPath>().unwrap(), 1),
+            Ok(Vec::new())
+        );
+        let e = tracker
+            .add(&"foo/bar/cleesh.txt".parse::<KeyPath>().unwrap(), 2)
+            .unwrap_err();
+        assert_eq!(
+            e,
+            TreeTrackerError::Unsorted {
+                before: "foo/gnusto.txt".into(),
+                after: "foo/bar/cleesh.txt".into()
+            }
+        );
+    }
+
+    #[test]
+    fn files_in_root() {
+        let mut tracker = TreeTracker::new();
+        assert_eq!(
+            tracker.add(&"foo.txt".parse::<KeyPath>().unwrap(), 1),
+            Ok(Vec::new())
+        );
+        assert_eq!(
+            tracker.add(&"gnusto/cleesh.txt".parse::<KeyPath>().unwrap(), 2),
+            Ok(Vec::new())
+        );
+        let dirs = tracker
+            .add(&"quux.txt".parse::<KeyPath>().unwrap(), 3)
+            .unwrap();
+        assert_eq!(dirs.len(), 1);
+        assert_eq!(dirs[0].path(), Some("gnusto"));
+        assert_eq!(dirs[0].entries, vec![Entry::file("cleesh.txt", 2)]);
+        let dirs = tracker.finish();
+        assert_eq!(dirs.len(), 1);
+        assert_eq!(dirs[0].path(), None);
+        assert_eq!(
+            dirs[0].entries,
+            vec![
+                Entry::file("foo.txt", 1),
+                Entry::dir("gnusto"),
+                Entry::file("quux.txt", 3)
+            ]
+        );
+    }
+}
