@@ -513,6 +513,8 @@ impl Syncer {
                 None => true,
             };
             if to_delete {
+                // TODO: Store the deletion in a Vec and delete them *after*
+                // finishing iterating over the directory
                 // TODO: Log
                 if is_dir {
                     // TODO: Use async here?

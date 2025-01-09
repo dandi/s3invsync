@@ -17,71 +17,97 @@ impl<T> TreeTracker<T> {
         //old_filename: Option<String>, // TODO
         value: T,
     ) -> Result<Vec<Directory<T>>, TreeTrackerError> {
-        let (dirpath, filename) = key.split();
+        fn after_error(key: &KeyPath, mut e: TreeTrackerError) -> TreeTrackerError {
+            if let TreeTrackerError::Unsorted { ref mut after, .. } = e {
+                *after = key.into();
+            }
+            e
+        }
         let mut popped_dirs = Vec::new();
-        let mut parts = dirpath.unwrap_or_default().split('/').enumerate();
-        for (i, dirname) in parts.by_ref() {
-            let cmp_dirname = CmpName::Dir(dirname);
+        let mut partiter = KeyComponents::new(key, value);
+        while let Some((i, part)) = partiter.next() {
             let Some(pd) = self.0.get_mut(i) else {
                 unreachable!(
                     "TreeTracker::add() iteration should not go past the end of the stack"
                 );
             };
-            if let Some(cd) = pd.current_subdir.as_ref() {
-                match cmp_dirname.cmp(&CmpName::Dir(cd)) {
-                    Ordering::Equal => continue,
-                    Ordering::Greater => {
-                        // Close current dirs & push
-                        for _ in (i + 1)..(self.0.len()) {
-                            popped_dirs.push(self.pop());
+            let cmp_name = part.cmp_name();
+            match part {
+                Component::File(name, value) => {
+                    match (pd.last_entry_is_dir(), pd.cmp_vs_last_entry(cmp_name)) {
+                        (in_dir, Some(Ordering::Greater)) => {
+                            if in_dir {
+                                // Close current dirs
+                                for _ in (i + 1)..(self.0.len()) {
+                                    popped_dirs.push(self.pop());
+                                }
+                            }
+                            self.push_file(name, value)
+                                .map_err(|e| after_error(key, e))?;
+                            break;
                         }
-                        self.push_dir(dirname);
-                        break; // GOTO push
-                    }
-                    Ordering::Less => {
-                        return Err(TreeTrackerError::Unsorted {
-                            before: self.last_key(),
-                            after: key.into(),
-                        });
-                    }
-                }
-            } else if let Some(en) = pd.entries.last() {
-                match cmp_dirname.cmp(&en.cmp_name()) {
-                    Ordering::Equal => {
-                        assert!(en.is_file(), "last element of PartialDirectory::entries should be a file when current_subdir is None");
-                        return Err(TreeTrackerError::Conflict(self.last_key()));
-                    }
-                    Ordering::Greater => {
-                        self.push_dir(dirname);
-                        break; // GOTO push
-                    }
-                    Ordering::Less => {
-                        return Err(TreeTrackerError::Unsorted {
-                            before: self.last_key(),
-                            after: key.into(),
-                        });
+                        (true, Some(Ordering::Equal)) => {
+                            return Err(TreeTrackerError::Conflict(self.last_key()));
+                        }
+                        (false, Some(Ordering::Equal)) => {
+                            // XXX: Change this when support for old filenames is
+                            //      added:
+                            return Err(TreeTrackerError::DuplicateFile(key.into()));
+                        }
+                        (_, Some(Ordering::Less)) => {
+                            return Err(TreeTrackerError::Unsorted {
+                                before: self.last_key(),
+                                after: key.into(),
+                            });
+                        }
+                        (_, None) => {
+                            assert!(
+                                self.is_empty(),
+                                "top dir of TreeTracker should be root when empty"
+                            );
+                            self.push_file(name, value)
+                                .map_err(|e| after_error(key, e))?;
+                            break;
+                        }
                     }
                 }
-            } else {
-                assert!(
-                    self.is_empty(),
-                    "top dir of TreeTracker should be root when empty"
-                );
-                self.push_dir(dirname);
-                break; // GOTO push
+                Component::Dir(name) => {
+                    match (pd.last_entry_is_dir(), pd.cmp_vs_last_entry(cmp_name)) {
+                        (in_dir, Some(Ordering::Greater)) => {
+                            if in_dir {
+                                // Close current dirs
+                                for _ in (i + 1)..(self.0.len()) {
+                                    popped_dirs.push(self.pop());
+                                }
+                            }
+                            self.push_parts(name, partiter)
+                                .map_err(|e| after_error(key, e))?;
+                            break;
+                        }
+                        (true, Some(Ordering::Equal)) => continue,
+                        (false, Some(Ordering::Equal)) => {
+                            return Err(TreeTrackerError::Conflict(self.last_key()));
+                        }
+                        (_, Some(Ordering::Less)) => {
+                            return Err(TreeTrackerError::Unsorted {
+                                before: self.last_key(),
+                                after: key.into(),
+                            });
+                        }
+                        (_, None) => {
+                            assert!(
+                                self.is_empty(),
+                                "top dir of TreeTracker should be root when empty"
+                            );
+                            self.push_parts(name, partiter)
+                                .map_err(|e| after_error(key, e))?;
+                            break;
+                        }
+                    }
+                }
             }
         }
-        for (_, dirname) in parts {
-            self.push_dir(dirname);
-        }
-        if self.push_file(filename, value) {
-            Ok(popped_dirs)
-        } else {
-            Err(TreeTrackerError::Unsorted {
-                before: self.last_key(),
-                after: key.into(),
-            })
-        }
+        Ok(popped_dirs)
     }
 
     pub(super) fn finish(mut self) -> Vec<Directory<T>> {
@@ -96,6 +122,21 @@ impl<T> TreeTracker<T> {
         self.0.is_empty() || (self.0.len() == 1 && self.0[0].is_empty())
     }
 
+    fn push_parts(
+        &mut self,
+        first_dirname: &str,
+        rest: KeyComponents<'_, T>,
+    ) -> Result<(), TreeTrackerError> {
+        self.push_dir(first_dirname);
+        for (_, part) in rest {
+            match part {
+                Component::Dir(name) => self.push_dir(name),
+                Component::File(name, value) => self.push_file(name, value)?,
+            }
+        }
+        Ok(())
+    }
+
     fn push_dir(&mut self, name: &str) {
         let Some(pd) = self.0.last_mut() else {
             panic!("TreeTracker::push_dir() called on void tracker");
@@ -108,7 +149,7 @@ impl<T> TreeTracker<T> {
         self.0.push(PartialDirectory::new());
     }
 
-    fn push_file(&mut self, name: &str, value: T) -> bool {
+    fn push_file(&mut self, name: &str, value: T) -> Result<(), TreeTrackerError> {
         let Some(pd) = self.0.last_mut() else {
             panic!("TreeTracker::push_file() called on void tracker");
         };
@@ -117,12 +158,21 @@ impl<T> TreeTracker<T> {
             "TreeTracker::push_file() called when top dir has subdir"
         );
         if let Some(en) = pd.entries.last() {
-            if en.cmp_name() >= CmpName::File(name) {
-                return false;
+            match CmpName::File(name).cmp(&en.cmp_name()) {
+                Ordering::Equal => return Err(TreeTrackerError::DuplicateFile(self.last_key())),
+                // IMPORTANT: The `after` needs to be replaced with the full path in the
+                // calling context:
+                Ordering::Less => {
+                    return Err(TreeTrackerError::Unsorted {
+                        before: self.last_key(),
+                        after: name.into(),
+                    })
+                }
+                Ordering::Greater => (),
             }
         }
         pd.entries.push(Entry::file(name, value));
-        true
+        Ok(())
     }
 
     fn pop(&mut self) -> Directory<T> {
@@ -188,6 +238,17 @@ impl<T> PartialDirectory<T> {
             panic!("PartialDirectory::close_current() called without a current directory");
         };
         self.entries.push(Entry::dir(name));
+    }
+
+    fn last_entry_is_dir(&self) -> bool {
+        self.current_subdir.is_some()
+    }
+
+    fn cmp_vs_last_entry(&self, cname: CmpName<'_>) -> Option<Ordering> {
+        self.current_subdir
+            .as_deref()
+            .map(|cd| cname.cmp(&CmpName::Dir(cd)))
+            .or_else(|| self.entries.last().map(|en| cname.cmp(&en.cmp_name())))
     }
 }
 
@@ -341,6 +402,58 @@ pub(super) enum TreeTrackerError {
     Unsorted { before: String, after: String },
     #[error("path {0:?} is used as both a file and a directory")]
     Conflict(String),
+    #[error("file key {0:?} encountered more than once")]
+    DuplicateFile(String),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct KeyComponents<'a, T> {
+    i: usize,
+    path: &'a str,
+    value: Option<T>,
+}
+
+impl<'a, T> KeyComponents<'a, T> {
+    fn new(key: &'a KeyPath, value: T) -> Self {
+        KeyComponents {
+            i: 0,
+            path: key.as_ref(),
+            value: Some(value),
+        }
+    }
+}
+
+impl<'a, T> Iterator for KeyComponents<'a, T> {
+    type Item = (usize, Component<'a, T>);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let c = match self.path.find('/') {
+            Some(i) => {
+                let name = &self.path[..i];
+                self.path = &self.path[(i + 1)..];
+                Component::Dir(name)
+            }
+            None => Component::File(self.path, self.value.take()?),
+        };
+        let i = self.i;
+        self.i += 1;
+        Some((i, c))
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Component<'a, T> {
+    Dir(&'a str),
+    File(&'a str, T),
+}
+
+impl<'a, T> Component<'a, T> {
+    fn cmp_name(&self) -> CmpName<'a> {
+        match self {
+            Component::Dir(name) => CmpName::Dir(name),
+            Component::File(name, _) => CmpName::File(name),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -648,3 +761,5 @@ mod tests {
 // - close a subdirectory, then start a new directory in its parent
 // - close a directory in the root, continue on
 // - mix of files & directories in a directory
+// - file in root dir (with & without preceding entries)
+// - KeyComponents
