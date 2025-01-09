@@ -1,3 +1,5 @@
+mod metadata;
+use self::metadata::*;
 use crate::consts::METADATA_FILENAME;
 use crate::inventory::{InventoryEntry, InventoryItem, ItemDetails};
 use crate::manifest::{CsvManifest, FileSpec};
@@ -5,7 +7,6 @@ use crate::s3::S3Client;
 use crate::timestamps::DateHM;
 use crate::util::*;
 use anyhow::Context;
-use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::io::ErrorKind;
 use std::num::NonZeroUsize;
@@ -290,7 +291,7 @@ impl Syncer {
         } else {
             self.outdir.clone()
         };
-        let mdmanager = MetadataManager::new(self, &parentdir, filename);
+        let mdmanager = FileMetadataManager::new(self, &parentdir, filename);
 
         if item.is_latest {
             tracing::info!("Object is latest version of key");
@@ -470,137 +471,6 @@ impl Syncer {
             virtual_mem,
             "Process info",
         );
-    }
-}
-
-/// Metadata about the latest version of a key
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-struct Metadata {
-    /// The object's version ID
-    version_id: String,
-
-    /// The object's etag
-    etag: String,
-}
-
-impl Metadata {
-    /// Return the filename used for backing up a non-latest object that has
-    /// `self` as its metadata and `basename` as the filename portion of its
-    /// key
-    fn old_filename(&self, basename: &str) -> String {
-        format!("{}.old.{}.{}", basename, self.version_id, self.etag)
-    }
-}
-
-/// Handle for manipulating the metadata for the latest version of a key in a
-/// local JSON database
-struct MetadataManager<'a> {
-    syncer: &'a Syncer,
-
-    /// The local directory in which the downloaded object and the JSON
-    /// database are both located
-    dirpath: &'a Path,
-
-    /// The path to the JSON database
-    database_path: PathBuf,
-
-    /// The filename of the object
-    filename: &'a str,
-}
-
-impl<'a> MetadataManager<'a> {
-    fn new(syncer: &'a Syncer, parentdir: &'a Path, filename: &'a str) -> Self {
-        MetadataManager {
-            syncer,
-            dirpath: parentdir,
-            database_path: parentdir.join(METADATA_FILENAME),
-            filename,
-        }
-    }
-
-    /// Acquire a lock on this JSON database
-    async fn lock(&self) -> Guard<'a> {
-        self.syncer.lock_path(self.database_path.clone()).await
-    }
-
-    /// Read & parse the database file.  If the file does not exist, return an
-    /// empty map.
-    fn load(&self) -> anyhow::Result<BTreeMap<String, Metadata>> {
-        let content = match fs_err::read_to_string(&self.database_path) {
-            Ok(content) => content,
-            Err(e) if e.kind() == ErrorKind::NotFound => String::from("{}"),
-            Err(e) => return Err(e.into()),
-        };
-        serde_json::from_str(&content).with_context(|| {
-            format!(
-                "failed to deserialize contents of {}",
-                self.database_path.display()
-            )
-        })
-    }
-
-    /// Set the content of the database file to the serialized map
-    fn store(&self, data: BTreeMap<String, Metadata>) -> anyhow::Result<()> {
-        let fp = tempfile::Builder::new()
-            .prefix(".s3invsync.versions.")
-            .tempfile_in(self.dirpath)
-            .with_context(|| {
-                format!(
-                    "failed to create temporary database file for updating {}",
-                    self.database_path.display()
-                )
-            })?;
-        serde_json::to_writer_pretty(fp.as_file(), &data).with_context(|| {
-            format!(
-                "failed to serialize metadata to {}",
-                self.database_path.display()
-            )
-        })?;
-        fp.persist(&self.database_path).with_context(|| {
-            format!(
-                "failed to persist temporary database file to {}",
-                self.database_path.display()
-            )
-        })?;
-        Ok(())
-    }
-
-    /// Retrieve the metadata for the key from the database
-    async fn get(&self) -> anyhow::Result<Metadata> {
-        tracing::trace!(file = self.filename, database = %self.database_path.display(), "Fetching object metadata for file from database");
-        let mut data = {
-            let _guard = self.lock().await;
-            self.load()?
-        };
-        let Some(md) = data.remove(self.filename) else {
-            anyhow::bail!(
-                "No entry for {:?} in {}",
-                self.filename,
-                self.database_path.display()
-            );
-        };
-        Ok(md)
-    }
-
-    /// Set the metadata for the key in the database to `md`
-    async fn set(&self, md: Metadata) -> anyhow::Result<()> {
-        tracing::trace!(file = self.filename, database = %self.database_path.display(), "Setting object metadata for file in database");
-        let _guard = self.lock().await;
-        let mut data = self.load()?;
-        data.insert(self.filename.to_owned(), md);
-        self.store(data)?;
-        Ok(())
-    }
-
-    /// Remove the metadata for the key from the database
-    async fn delete(&self) -> anyhow::Result<()> {
-        tracing::trace!(file = self.filename, database = %self.database_path.display(), "Deleting object metadata for file from database");
-        let _guard = self.lock().await;
-        let mut data = self.load()?;
-        if data.remove(self.filename).is_some() {
-            self.store(data)?;
-        }
-        Ok(())
     }
 }
 

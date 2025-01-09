@@ -200,6 +200,7 @@ mod tests {
     #[case(".old.bar.baz", false)]
     #[case("foo.old..baz", false)]
     #[case("foo.old..", false)]
+    #[case(".s3invsync.versions.json", true)]
     fn test_is_special_component(#[case] s: &str, #[case] r: bool) {
         assert_eq!(is_special_component(s), r);
     }
