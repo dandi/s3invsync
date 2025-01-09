@@ -284,13 +284,25 @@ impl<T> Directory<T> {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+/// A wrapper around an individual path name component that compares it to
+/// other components as though they were part of longer paths, i.e., directory
+/// names have an implicit trailing '/' added.  As an exception, if a file name
+/// and a directory name are equal aside from the trailing '/', this type
+/// compares them as equal.
+#[derive(Clone, Copy, Debug)]
 enum CmpName<'a> {
     File(&'a str),
     Dir(&'a str),
 }
 
 impl CmpName<'_> {
+    fn name(&self) -> &str {
+        match self {
+            CmpName::File(s) => s,
+            CmpName::Dir(s) => s,
+        }
+    }
+
     fn chars(&self) -> impl Iterator<Item = char> + '_ {
         match self {
             CmpName::File(s) => Either::Left(s.chars()),
@@ -298,6 +310,14 @@ impl CmpName<'_> {
         }
     }
 }
+
+impl PartialEq for CmpName<'_> {
+    fn eq(&self, other: &CmpName<'_>) -> bool {
+        self.cmp(other) == Ordering::Equal
+    }
+}
+
+impl Eq for CmpName<'_> {}
 
 impl PartialOrd for CmpName<'_> {
     fn partial_cmp(&self, other: &CmpName<'_>) -> Option<Ordering> {
@@ -307,7 +327,11 @@ impl PartialOrd for CmpName<'_> {
 
 impl Ord for CmpName<'_> {
     fn cmp(&self, other: &CmpName<'_>) -> Ordering {
-        self.chars().cmp(other.chars())
+        if self.name() == other.name() {
+            Ordering::Equal
+        } else {
+            self.chars().cmp(other.chars())
+        }
     }
 }
 
@@ -423,6 +447,35 @@ mod tests {
             tracker.add(&"foo/bar/apple!banana.txt".parse::<KeyPath>().unwrap(), 2),
             Ok(Vec::new())
         );
+    }
+
+    mod cmp_name {
+        use super::*;
+
+        #[test]
+        fn dir_eq_file() {
+            assert!(CmpName::File("foo") == CmpName::Dir("foo"));
+        }
+
+        #[test]
+        fn pre_slash_dir_before_dir() {
+            assert!(CmpName::Dir("apple!banana") < CmpName::Dir("apple"));
+        }
+
+        #[test]
+        fn pre_slash_file_before_dir() {
+            assert!(CmpName::File("apple!banana") < CmpName::Dir("apple"));
+        }
+
+        #[test]
+        fn pre_slash_dir_after_file() {
+            assert!(CmpName::Dir("apple!banana") > CmpName::File("apple"));
+        }
+
+        #[test]
+        fn pre_slash_file_after_file() {
+            assert!(CmpName::File("apple!banana") > CmpName::File("apple"));
+        }
     }
 }
 
