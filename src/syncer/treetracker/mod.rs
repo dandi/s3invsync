@@ -548,4 +548,3 @@ mod tests {
 // - close a directory in the root, continue on
 // - mix of files & directories in a directory
 // - file in root dir (with & without preceding entries)
-// - KeyComponents

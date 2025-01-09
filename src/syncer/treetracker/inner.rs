@@ -220,4 +220,28 @@ mod tests {
             assert!(CmpName::File("apple!banana") > CmpName::File("apple"));
         }
     }
+
+    mod key_components {
+        use super::*;
+
+        #[test]
+        fn plain() {
+            let key = "foo/bar/quux.txt".parse::<KeyPath>().unwrap();
+            let mut iter = KeyComponents::new(&key, 1);
+            assert_eq!(iter.next(), Some((0, Component::Dir("foo"))));
+            assert_eq!(iter.next(), Some((1, Component::Dir("bar"))));
+            assert_eq!(iter.next(), Some((2, Component::File("quux.txt", 1))));
+            assert_eq!(iter.next(), None);
+            assert_eq!(iter.next(), None);
+        }
+
+        #[test]
+        fn filename_only() {
+            let key = "quux.txt".parse::<KeyPath>().unwrap();
+            let mut iter = KeyComponents::new(&key, 1);
+            assert_eq!(iter.next(), Some((0, Component::File("quux.txt", 1))));
+            assert_eq!(iter.next(), None);
+            assert_eq!(iter.next(), None);
+        }
+    }
 }
