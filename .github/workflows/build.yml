@@ -91,6 +91,7 @@ jobs:
         run: |
           mkdir "$asset_name"
           mv "$target_path" "$asset_name"
+          cp README.md LICENSE CHANGELOG.md "$asset_name"
           zip -r "$asset_name".zip "$asset_name"
           gh release upload "$tag" "$asset_name".zip
         env:
