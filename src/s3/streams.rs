@@ -19,7 +19,7 @@ type InnerListError = SdkError<ListObjectsV2Error, HttpResponse>;
 /// parses their names as [`DateHM`] values, yielding the successful parses.
 #[derive(Debug)]
 #[must_use = "streams do nothing unless polled"]
-pub(super) struct ListManifestDates {
+pub(crate) struct ListManifestDates {
     url: S3Location,
     inner: Option<PaginationStream<Result<ListObjectsV2Output, InnerListError>>>,
     results: VecDeque<DateHM>,
