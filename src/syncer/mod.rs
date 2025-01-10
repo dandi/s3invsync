@@ -10,6 +10,9 @@ use crate::s3::S3Client;
 use crate::timestamps::DateHM;
 use crate::util::*;
 use anyhow::Context;
+use async_executors::TokioTpBuilder;
+use async_nursery::{NurseExt, Nursery, NurseryStream};
+use futures_util::StreamExt;
 use std::collections::BTreeMap;
 use std::io::ErrorKind;
 use std::num::NonZeroUsize;
@@ -18,7 +21,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc, Mutex,
 };
-use tokio::task::JoinSet;
+use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 
 /// Capacity of async channels
@@ -26,6 +29,8 @@ const CHANNEL_SIZE: usize = 65535;
 
 /// Lock guard returned by [`Syncer::lock_path()`]
 type Guard<'a> = <lockable::LockPool<PathBuf> as lockable::Lockable<PathBuf, ()>>::Guard<'a>;
+
+type ObjChannelItem = (InventoryItem, Option<Arc<Notify>>);
 
 /// Object responsible for syncing an S3 bucket to a local backup by means of
 /// the bucket's S3 Inventory
@@ -57,10 +62,10 @@ pub(crate) struct Syncer {
     /// A clone of the channel used for sending inventory entries off to be
     /// downloaded.  This is set to `None` after spawning all of the inventory
     /// list download tasks.
-    obj_sender: Mutex<Option<async_channel::Sender<InventoryItem>>>,
+    obj_sender: Mutex<Option<async_channel::Sender<ObjChannelItem>>>,
 
     /// A clone of the channel used for receiving inventory entries to download
-    obj_receiver: async_channel::Receiver<InventoryItem>,
+    obj_receiver: async_channel::Receiver<ObjChannelItem>,
 
     /// Whether the backup was terminated by Ctrl-C
     terminated: AtomicBool,
@@ -114,7 +119,11 @@ impl Syncer {
 
         tracing::trace!(path = %self.outdir.display(), "Creating root output directory");
         fs_err::create_dir_all(&self.outdir).map_err(|e| MultiError(vec![e.into()]))?;
-        let mut joinset = JoinSet::new();
+        let (nursery, nursery_stream) = Nursery::new(
+            TokioTpBuilder::new()
+                .build()
+                .expect("building tokio runtime should not fail"),
+        );
         let obj_sender = {
             let guard = self
                 .obj_sender
@@ -129,7 +138,9 @@ impl Syncer {
         let this = self.clone();
         let token = self.token.clone();
         let sender = obj_sender.clone();
-        joinset.spawn(async move {
+        let subnursery = nursery.clone();
+        let _ = nursery.nurse(async move {
+            let inner_token = token.clone();
             token.run_until_cancelled(async move {
                 let mut tracker = TreeTracker::new();
                 for spec in fspecs {
@@ -140,14 +151,22 @@ impl Syncer {
                                 tracing::debug!(url = %d.url(), "Ignoring directory entry in inventory list");
                             }
                             InventoryEntry::Item(item) => {
-                                // TODO: Store a Cond for awaiting completion of item processing
-                                // TODO: Old filenames:
-                                for dir in tracker.add(&item.key, (), None)? {
-                                    // TODO: Spawn in JoinSet
-                                    let this2 = this.clone();
-                                    tokio::task::spawn_blocking(move || this2.cleanup_dir(dir));
-                                }
-                                if sender.send(item).await.is_err() {
+                                let notify = if !item.is_deleted() {
+                                    let notify = Arc::new(Notify::new());
+                                    for dir in tracker.add(&item.key, notify.clone(), None)? {
+                                        let _ = subnursery.nurse({
+                                            let this = this.clone();
+                                            let token = inner_token.clone();
+                                            async move {
+                                                token.run_until_cancelled(async move { this.cleanup_dir(dir).await }).await.unwrap_or(Ok(()))
+                                            }
+                                        });
+                                    }
+                                    Some(notify)
+                                } else {
+                                    None
+                                };
+                                if sender.send((item, notify)).await.is_err() {
                                     // Assume we're shutting down
                                     return Ok(());
                                 }
@@ -156,9 +175,13 @@ impl Syncer {
                     }
                 }
                 for dir in tracker.finish() {
-                    // TODO: Spawn in JoinSet
-                    let this2 = this.clone();
-                    tokio::task::spawn_blocking(move || this2.cleanup_dir(dir));
+                    let _ = subnursery.nurse({
+                        let this = this.clone();
+                        let token = inner_token.clone();
+                        async move {
+                            token.run_until_cancelled(async move { this.cleanup_dir(dir).await }).await.unwrap_or(Ok(()))
+                        }
+                    });
                 }
                 Ok(())
             }).await.unwrap_or(Ok(()))
@@ -175,18 +198,23 @@ impl Syncer {
         for _ in 0..self.jobs.get() {
             let this = self.clone();
             let recv = self.obj_receiver.clone();
-            joinset.spawn(async move {
-                while let Ok(item) = recv.recv().await {
+            let _ = nursery.nurse(async move {
+                while let Ok((item, notify)) = recv.recv().await {
                     if this.token.is_cancelled() {
                         return Ok(());
                     }
-                    Box::pin(this.process_item(item)).await?;
+                    let r = Box::pin(this.process_item(item)).await;
+                    if let Some(n) = notify {
+                        n.notify_one();
+                    }
+                    r?;
                 }
                 Ok(())
             });
         }
 
-        let r = self.await_joinset(joinset).await;
+        drop(nursery);
+        let r = self.await_nursery(nursery_stream).await;
         self.filterlog.finish();
         r
     }
@@ -198,7 +226,11 @@ impl Syncer {
         specs: Vec<FileSpec>,
     ) -> Result<Vec<FileSpec>, MultiError> {
         tracing::info!("Peeking at inventory lists in order to sort by first line ...");
-        let mut joinset = JoinSet::new();
+        let (nursery, nursery_stream) = Nursery::new(
+            TokioTpBuilder::new()
+                .build()
+                .expect("building tokio runtime should not fail"),
+        );
         let mut receiver = {
             let specs = Arc::new(Mutex::new(specs));
             let (output_sender, output_receiver) = tokio::sync::mpsc::channel(CHANNEL_SIZE);
@@ -207,7 +239,7 @@ impl Syncer {
                 let token = self.token.clone();
                 let specs = specs.clone();
                 let sender = output_sender.clone();
-                joinset.spawn(async move {
+                let _ = nursery.nurse(async move {
                     token
                         .run_until_cancelled(async move {
                             while let Some(fspec) = {
@@ -230,32 +262,28 @@ impl Syncer {
             }
             output_receiver
         };
+        drop(nursery);
         let mut firsts2fspecs = BTreeMap::new();
         while let Some((fspec, entry)) = receiver.recv().await {
             firsts2fspecs.insert(entry.key().to_owned(), fspec);
         }
-        self.await_joinset(joinset).await?;
+        self.await_nursery(nursery_stream).await?;
         Ok(firsts2fspecs.into_values().collect())
     }
 
-    async fn await_joinset(
+    async fn await_nursery(
         &self,
-        mut joinset: JoinSet<anyhow::Result<()>>,
+        mut stream: NurseryStream<anyhow::Result<()>>,
     ) -> Result<(), MultiError> {
         let mut errors = Vec::new();
-        while let Some(r) = joinset.join_next().await {
-            match r {
-                Ok(Ok(())) => (),
-                Ok(Err(e)) => {
-                    tracing::error!(error = ?e, "Error occurred");
-                    if errors.is_empty() {
-                        tracing::info!("Shutting down in response to error");
-                        self.shutdown();
-                    }
-                    errors.push(e);
+        while let Some(r) = stream.next().await {
+            if let Err(e) = r {
+                tracing::error!(error = ?e, "Error occurred");
+                if errors.is_empty() {
+                    tracing::info!("Shutting down in response to error");
+                    self.shutdown();
                 }
-                Err(e) if e.is_panic() => std::panic::resume_unwind(e.into_panic()),
-                Err(_) => (),
+                errors.push(e);
             }
         }
         if self.terminated.load(Ordering::Acquire) {
@@ -489,16 +517,24 @@ impl Syncer {
         );
     }
 
-    fn cleanup_dir(&self, dir: Directory<()>) -> anyhow::Result<()> {
-        // TODO: Wait for directory's jobs to finish
+    #[tracing::instrument(skip_all, fields(dirpath = %dir.path().unwrap_or("<root>")))]
+    async fn cleanup_dir(&self, dir: Directory<Arc<Notify>>) -> anyhow::Result<()> {
+        let mut notifiers = Vec::new();
+        let dir = dir.map(|n| {
+            notifiers.push(n);
+        });
+        for n in notifiers {
+            n.notified().await;
+        }
         let dirpath = match dir.path() {
             Some(p) => self.outdir.join(p),
             None => self.outdir.clone(),
         };
+        let mut files_to_delete = Vec::new();
+        let mut dirs_to_delete = Vec::new();
         let mut dbdeletions = Vec::new();
         for entry in fs_err::read_dir(&dirpath)? {
             let entry = entry?;
-            let epath = entry.path();
             let is_dir = entry.file_type()?.is_dir();
             let to_delete = match entry.file_name().to_str() {
                 Some(name) => {
@@ -514,19 +550,26 @@ impl Syncer {
                 None => true,
             };
             if to_delete {
-                // TODO: Store the deletion in a Vec and delete them *after*
-                // finishing iterating over the directory
-                // TODO: Log
                 if is_dir {
-                    // TODO: Use async here?
-                    fs_err::remove_dir_all(&epath)?;
+                    dirs_to_delete.push(entry.path());
                 } else {
-                    fs_err::remove_file(&epath)?;
+                    files_to_delete.push(entry.path());
                 }
             }
         }
+        for p in files_to_delete {
+            tracing::debug!(path = %p.display(), "File does not belong in backup; deleting");
+            if let Err(e) = fs_err::remove_file(&p) {
+                tracing::warn!(error = %e, path = %p.display(), "Failed to delete file");
+            }
+        }
+        for p in dirs_to_delete {
+            tracing::debug!(path = %p.display(), "Directory does not belong in backup; deleting");
+            if let Err(e) = fs_err::tokio::remove_dir_all(&p).await {
+                tracing::warn!(error = %e, path = %p.display(), "Failed to delete directory");
+            }
+        }
         if !dbdeletions.is_empty() {
-            // TODO: Log
             let manager = MetadataManager::new(&dirpath);
             let mut data = manager.load()?;
             for name in dbdeletions {

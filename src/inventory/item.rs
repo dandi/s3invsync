@@ -70,6 +70,11 @@ impl InventoryItem {
         S3Location::new(self.bucket.clone(), String::from(&self.key))
             .with_version_id(self.version_id.clone())
     }
+
+    /// Returns whether the object is a delete marker
+    pub(crate) fn is_deleted(&self) -> bool {
+        self.details == ItemDetails::Deleted
+    }
 }
 
 /// Metadata about an object's content
