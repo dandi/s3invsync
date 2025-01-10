@@ -15,6 +15,13 @@ use thiserror::Error;
 pub(crate) struct KeyPath(String);
 
 impl KeyPath {
+    pub(crate) fn name(&self) -> &str {
+        self.0
+            .split('/')
+            .next_back()
+            .expect("path should be nonempty")
+    }
+
     /// Split the path into the directory component (if any) and filename
     pub(crate) fn split(&self) -> (Option<&str>, &str) {
         match self.0.rsplit_once('/') {

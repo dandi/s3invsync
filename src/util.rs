@@ -113,6 +113,10 @@ pub(crate) fn force_create_dir_all<I: IntoIterator<Item: AsRef<Path>>>(
     Ok(())
 }
 
+pub(crate) fn make_old_filename(basename: &str, version_id: &str, etag: &str) -> String {
+    format!("{basename}.old.{version_id}.{etag}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -147,7 +147,7 @@ impl Syncer {
                             InventoryEntry::Item(item) => {
                                 let notify = if !item.is_deleted() {
                                     let notify = Arc::new(Notify::new());
-                                    for dir in tracker.add(&item.key, notify.clone(), None)? {
+                                    for dir in tracker.add(&item.key, notify.clone(), item.old_filename())? {
                                         subnursery.spawn({
                                             this.until_cancelled_ok({
                                                 let this = this.clone();

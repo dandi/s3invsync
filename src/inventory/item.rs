@@ -1,5 +1,6 @@
 use crate::keypath::KeyPath;
 use crate::s3::S3Location;
+use crate::util::make_old_filename;
 use time::OffsetDateTime;
 
 /// An entry in an inventory list file
@@ -74,6 +75,14 @@ impl InventoryItem {
     /// Returns whether the object is a delete marker
     pub(crate) fn is_deleted(&self) -> bool {
         self.details == ItemDetails::Deleted
+    }
+
+    pub(crate) fn old_filename(&self) -> Option<String> {
+        let ItemDetails::Present { ref etag, .. } = self.details else {
+            return None;
+        };
+        (!self.is_deleted() && !self.is_latest)
+            .then(|| make_old_filename(self.key.name(), &self.version_id, etag))
     }
 }
 

@@ -1,4 +1,5 @@
 use super::*;
+use crate::util::make_old_filename;
 use serde::{Deserialize, Serialize};
 use std::io::ErrorKind;
 
@@ -17,7 +18,7 @@ impl Metadata {
     /// `self` as its metadata and `basename` as the filename portion of its
     /// key
     pub(super) fn old_filename(&self, basename: &str) -> String {
-        format!("{}.old.{}.{}", basename, self.version_id, self.etag)
+        make_old_filename(basename, &self.version_id, &self.etag)
     }
 }
 
