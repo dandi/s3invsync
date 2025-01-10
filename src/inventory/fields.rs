@@ -340,7 +340,7 @@ pub(crate) enum ParseEntryError {
     KeyPath(#[from] KeyPathFromStringError),
 }
 
-/// Error retured by `FileSchema::from_str()` on invalid input
+/// Error returned by `FileSchema::from_str()` on invalid input
 #[derive(Clone, Debug, Eq, Error, PartialEq)]
 pub(crate) enum ParseFileSchemaError {
     /// The list of fields contained an unknown/unrecognized field
