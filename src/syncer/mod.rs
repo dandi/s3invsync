@@ -546,10 +546,11 @@ impl Syncer {
                     if is_dir {
                         !dir.contains_dir(name)
                     } else {
-                        if !is_special_component(name) {
+                        let b = !dir.contains_file(name) && name != METADATA_FILENAME;
+                        if b && !is_special_component(name) {
                             dbdeletions.push(name.to_owned());
                         }
-                        !dir.contains_file(name) && name != METADATA_FILENAME
+                        b
                     }
                 }
                 None => true,
