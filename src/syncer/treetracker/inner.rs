@@ -1,6 +1,7 @@
 use crate::keypath::KeyPath;
 use either::Either;
 use std::cmp::Ordering;
+use std::collections::HashMap;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct PartialDirectory<T> {
@@ -43,8 +44,8 @@ impl<T> PartialDirectory<T> {
 pub(super) enum Entry<T> {
     File {
         name: String,
-        //old_filenames: Vec<String>, // TODO
-        value: T,
+        value: Option<T>,
+        old_filenames: HashMap<String, T>,
     },
     Dir {
         name: String,
@@ -52,11 +53,23 @@ pub(super) enum Entry<T> {
 }
 
 impl<T> Entry<T> {
-    pub(super) fn file<S: Into<String>>(name: S, value: T) -> Entry<T> {
-        Entry::File {
-            name: name.into(),
-            //old_filenames: Vec::new(), // TODO
-            value,
+    pub(super) fn file<S: Into<String>>(
+        name: S,
+        value: T,
+        old_filename: Option<String>,
+    ) -> Entry<T> {
+        if let Some(of) = old_filename {
+            Entry::File {
+                name: name.into(),
+                value: None,
+                old_filenames: HashMap::from([(of, value)]),
+            }
+        } else {
+            Entry::File {
+                name: name.into(),
+                value: Some(value),
+                old_filenames: HashMap::new(),
+            }
         }
     }
 
@@ -69,14 +82,6 @@ impl<T> Entry<T> {
             Entry::File { name, .. } => name,
             Entry::Dir { name } => name,
         }
-    }
-
-    pub(super) fn is_file(&self) -> bool {
-        matches!(self, Entry::File { .. })
-    }
-
-    pub(super) fn is_dir(&self) -> bool {
-        matches!(self, Entry::Dir { .. })
     }
 
     pub(super) fn cmp_name(&self) -> CmpName<'_> {
@@ -143,14 +148,16 @@ pub(super) struct KeyComponents<'a, T> {
     i: usize,
     path: &'a str,
     value: Option<T>,
+    old_filename: Option<Option<String>>,
 }
 
 impl<'a, T> KeyComponents<'a, T> {
-    pub(super) fn new(key: &'a KeyPath, value: T) -> Self {
+    pub(super) fn new(key: &'a KeyPath, value: T, old_filename: Option<String>) -> Self {
         KeyComponents {
             i: 0,
             path: key.as_ref(),
             value: Some(value),
+            old_filename: Some(old_filename),
         }
     }
 }
@@ -165,7 +172,7 @@ impl<'a, T> Iterator for KeyComponents<'a, T> {
                 self.path = &self.path[(i + 1)..];
                 Component::Dir(name)
             }
-            None => Component::File(self.path, self.value.take()?),
+            None => Component::File(self.path, self.value.take()?, self.old_filename.take()?),
         };
         let i = self.i;
         self.i += 1;
@@ -173,17 +180,17 @@ impl<'a, T> Iterator for KeyComponents<'a, T> {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) enum Component<'a, T> {
     Dir(&'a str),
-    File(&'a str, T),
+    File(&'a str, T, Option<String>),
 }
 
 impl<'a, T> Component<'a, T> {
     pub(super) fn cmp_name(&self) -> CmpName<'a> {
         match self {
             Component::Dir(name) => CmpName::Dir(name),
-            Component::File(name, _) => CmpName::File(name),
+            Component::File(name, _, _) => CmpName::File(name),
         }
     }
 }
@@ -227,10 +234,10 @@ mod tests {
         #[test]
         fn plain() {
             let key = "foo/bar/quux.txt".parse::<KeyPath>().unwrap();
-            let mut iter = KeyComponents::new(&key, 1);
+            let mut iter = KeyComponents::new(&key, 1, None);
             assert_eq!(iter.next(), Some((0, Component::Dir("foo"))));
             assert_eq!(iter.next(), Some((1, Component::Dir("bar"))));
-            assert_eq!(iter.next(), Some((2, Component::File("quux.txt", 1))));
+            assert_eq!(iter.next(), Some((2, Component::File("quux.txt", 1, None))));
             assert_eq!(iter.next(), None);
             assert_eq!(iter.next(), None);
         }
@@ -238,8 +245,25 @@ mod tests {
         #[test]
         fn filename_only() {
             let key = "quux.txt".parse::<KeyPath>().unwrap();
-            let mut iter = KeyComponents::new(&key, 1);
-            assert_eq!(iter.next(), Some((0, Component::File("quux.txt", 1))));
+            let mut iter = KeyComponents::new(&key, 1, None);
+            assert_eq!(iter.next(), Some((0, Component::File("quux.txt", 1, None))));
+            assert_eq!(iter.next(), None);
+            assert_eq!(iter.next(), None);
+        }
+
+        #[test]
+        fn with_old_filename() {
+            let key = "foo/bar/quux.txt".parse::<KeyPath>().unwrap();
+            let mut iter = KeyComponents::new(&key, 1, Some("quux.old.1.2".into()));
+            assert_eq!(iter.next(), Some((0, Component::Dir("foo"))));
+            assert_eq!(iter.next(), Some((1, Component::Dir("bar"))));
+            assert_eq!(
+                iter.next(),
+                Some((
+                    2,
+                    Component::File("quux.txt", 1, Some("quux.old.1.2".into()))
+                ))
+            );
             assert_eq!(iter.next(), None);
             assert_eq!(iter.next(), None);
         }

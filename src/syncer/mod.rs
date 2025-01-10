@@ -141,7 +141,8 @@ impl Syncer {
                             }
                             InventoryEntry::Item(item) => {
                                 // TODO: Store a Cond for awaiting completion of item processing
-                                for dir in tracker.add(&item.key, ())? {
+                                // TODO: Old filenames:
+                                for dir in tracker.add(&item.key, (), None)? {
                                     // TODO: Spawn in JoinSet
                                     let this2 = this.clone();
                                     tokio::task::spawn_blocking(move || this2.cleanup_dir(dir));
