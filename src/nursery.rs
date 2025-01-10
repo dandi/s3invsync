@@ -1,22 +1,35 @@
+//! Simple tokio-based task group
 use futures_util::{FutureExt, Stream};
 use std::future::Future;
 use std::pin::Pin;
 use std::task::{ready, Context, Poll};
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 
+/// Type returned by [`FutureExt::catch_unwind()`].  If the inner task ran to
+/// completion, this is `Ok`; otherwise, if the taks panicked, this is `Err`.
 type UnwindResult<T> = Result<T, Box<dyn std::any::Any + Send>>;
 
+/// A handle for spawning new tasks in a task group/nursery.
+///
+/// `Nursery` is cloneable and sendable, and so it can be used to spawn tasks
+/// from inside other tasks in the nursery.  The nursery returned by
+/// [`Nursery::new()`] and all clones thereof must be dropped before the
+/// corresponding [`NurseryStream`] can yield `None`.
 #[derive(Debug)]
 pub(crate) struct Nursery<T> {
     sender: UnboundedSender<UnwindResult<T>>,
 }
 
 impl<T: Send + 'static> Nursery<T> {
+    /// Create a new nursery and return a handle for spawning tasks and a
+    /// [`Stream`] of task return values.  `T` is the `Output` type of the
+    /// futures that will be spawned in the nursery.
     pub(crate) fn new() -> (Nursery<T>, NurseryStream<T>) {
         let (sender, receiver) = unbounded_channel();
         (Nursery { sender }, NurseryStream { receiver })
     }
 
+    /// Spawn a future that returns `T` in the nursery.
     pub(crate) fn spawn<Fut>(&self, fut: Fut)
     where
         Fut: Future<Output = T> + Send + 'static,
@@ -39,6 +52,10 @@ impl<T> Clone for Nursery<T> {
     }
 }
 
+/// A [`Stream`] of the values returned by the tasks spawned in a nursery.
+///
+/// The corresponding [`Nursery`] and all clones thereof must be dropped before
+/// the stream can yield `None`.
 #[derive(Debug)]
 pub(crate) struct NurseryStream<T> {
     receiver: UnboundedReceiver<UnwindResult<T>>,

@@ -77,12 +77,13 @@ impl InventoryItem {
         self.details == ItemDetails::Deleted
     }
 
+    /// If the object is not a delete marker and is not the latest version of
+    /// the key, return the base filename at which it will be backed up.
     pub(crate) fn old_filename(&self) -> Option<String> {
         let ItemDetails::Present { ref etag, .. } = self.details else {
             return None;
         };
-        (!self.is_deleted() && !self.is_latest)
-            .then(|| make_old_filename(self.key.name(), &self.version_id, etag))
+        (!self.is_latest).then(|| make_old_filename(self.key.name(), &self.version_id, etag))
     }
 }
 

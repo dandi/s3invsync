@@ -5,14 +5,61 @@ use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use thiserror::Error;
 
+/// A type for tracking keys as they're encountered and — assuming the keys are
+/// in sorted order — reporting the contents of directories for which no
+/// further keys will be seen.
+///
+/// When a key is encountered, it can be for either its latest version or a
+/// non-latest version; non-latest versions are identified by "old filename"
+/// strings (the base filenames with which they are saved), which need not be
+/// sorted, but must be unique.
+///
+/// Each key version additionally has a payload of type `T`, used by
+/// `s3invsync` for storing [`tokio::sync::Notify`] values.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(super) struct TreeTracker<T>(Vec<PartialDirectory<T>>);
+pub(super) struct TreeTracker<T>(
+    /// A stack of currently "open" directories, i.e., directories for which
+    /// the `TreeTracker` is currently receiving keys.  The first element
+    /// represents the root of the directory tree, the next element (if any)
+    /// represents the current "open" directory within that, etc.
+    ///
+    /// # Invariants
+    ///
+    /// - The stack is nonempty.  (A `TreeTracker` with an empty stack is
+    ///   referred to as "void" by the documentation and by error messages.)
+    ///
+    /// - For all elements `pd` other than the last,
+    ///   `pd.current_subdirs.is_some()`.
+    ///
+    /// - For the last element `pd`, `pd.current_subdirs.is_none()`.
+    ///
+    /// - Once at least one key has been added to the tracker, for all elements
+    ///   `pd`, either `pd.entries.last()` or `pd.current_subdir` is
+    ///   non-`None`.
+    Vec<PartialDirectory<T>>,
+);
 
 impl<T> TreeTracker<T> {
+    /// Create a new, empty `TreeTracker`
     pub(super) fn new() -> Self {
         TreeTracker(vec![PartialDirectory::new()])
     }
 
+    /// Register the key `key` with payload `value` and the given old filename
+    /// (if this is not the latest version of the key).
+    ///
+    /// If encountering the key indicates that the currently "open" directory and
+    /// zero or more of its parents will no longer be receiving any further
+    /// keys, those directories are returned, innermost first.
+    ///
+    /// # Errors
+    ///
+    /// This method returns `Err` if `key` is lexicographically less than the
+    /// previous distinct key, if `key` has already been encountered as a
+    /// directory path, if a parent directory of `key` has already been
+    /// encountered as a file path, or if `key` equals the previous key and
+    /// this is the second time that `add()` was called with that key &
+    /// `old_filename` value.
     pub(super) fn add(
         &mut self,
         key: &KeyPath,
@@ -100,6 +147,8 @@ impl<T> TreeTracker<T> {
         Ok(popped_dirs)
     }
 
+    /// Indicate to the `TreeTracker` that all keys have been encountered.
+    /// Returns all remaining "open" directories, innermost first.
     pub(super) fn finish(mut self) -> Vec<Directory<T>> {
         let mut dirs = Vec::new();
         while !self.0.is_empty() {
@@ -108,10 +157,16 @@ impl<T> TreeTracker<T> {
         dirs
     }
 
+    /// Returns `true` if the `TreeTracker` is empty, i.e., if the stack is
+    /// empty or its only item is empty.
     fn is_empty(&self) -> bool {
         self.0.is_empty() || (self.0.len() == 1 && self.0[0].is_empty())
     }
 
+    /// Call [`TreeTracker::push_dir()`] on `first_dirname`, and then call
+    /// [`TreeTracker::push_dir()`] or [`TreeTracker::push_file()`], as
+    /// appropriate, on each element of the iterator
+    /// `rest`.
     fn push_parts(
         &mut self,
         first_dirname: &str,
@@ -129,6 +184,13 @@ impl<T> TreeTracker<T> {
         Ok(())
     }
 
+    /// Open a directory named `name` inside the current innermost open
+    /// directory.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the tracker is void or if the current innermost directory
+    /// already contains an open directory.
     fn push_dir(&mut self, name: &str) {
         let Some(pd) = self.0.last_mut() else {
             panic!("TreeTracker::push_dir() called on void tracker");
@@ -141,6 +203,23 @@ impl<T> TreeTracker<T> {
         self.0.push(PartialDirectory::new());
     }
 
+    /// Add the key with filename `name` to the current innermost open
+    /// directory if is not already present.  If `old_filename` is `None`,
+    /// `value` is used as the payload for the latest version of the key;
+    /// otherwise, the given old filename is added to the file's collection of
+    /// old filenames, and `value` is used as the corresponding payload.
+    ///
+    /// # Errors
+    ///
+    /// This method returns `Err` if `key` equals the previous key and there is
+    /// already a payload for the given `old_filename` value.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the tracker is void, if the current innermost directory
+    /// already contains an open directory, if `name` is less than the previous
+    /// name added to the innermost open directory, or if `name` equals the
+    /// previous name and the previously-added entry is a directory.
     fn push_file(
         &mut self,
         name: &str,
@@ -189,6 +268,13 @@ impl<T> TreeTracker<T> {
         Ok(())
     }
 
+    /// "Close" the current innermost open directory and return it as a
+    /// [`Directory`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if the tracker is void or if the current innermost directory
+    /// already contains an open directory.
     fn pop(&mut self) -> Directory<T> {
         let Some(pd) = self.0.pop() else {
             panic!("TreeTracker::pop() called on void tracker");
@@ -228,6 +314,12 @@ impl<T> TreeTracker<T> {
         }
     }
 
+    /// Returns the key most recently added to the tracker.
+    ///
+    /// # Panics
+    ///
+    /// Panics if no keys have been added to the tracker or the stack contains
+    /// more than one element yet one of them is empty.
     fn last_key(&self) -> String {
         let mut s = String::new();
         for pd in &self.0 {
@@ -252,27 +344,42 @@ impl<T> TreeTracker<T> {
     }
 }
 
+/// A directory, along with a collection of the names of the files &
+/// subdirectories within.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct Directory<T> {
-    path: Option<String>, // `None` for the root
+    /// The forward-slash-separated path to the directory, relative to the root
+    /// of the tree tracked by the creating [`TreeTracker`].  If the directory
+    /// is the root directory, this is `None`.
+    path: Option<String>,
+
+    /// A mapping from file names (including "old filenames") in the directory
+    /// to their payloads.
     files: HashMap<String, T>,
+
+    /// A set of the names of the subdirectories within the directory
     directories: HashSet<String>,
 }
 
 impl<T> Directory<T> {
+    /// Returns the forward-slash-separated path to the directory, relative to
+    /// the root of the tree tracked by the creating [`TreeTracker`].  If the
+    /// directory is the root directory, this is `None`.
     pub(super) fn path(&self) -> Option<&str> {
         self.path.as_deref()
     }
 
+    /// Returns `true` if the directory contains a file with the given name
     pub(super) fn contains_file(&self, name: &str) -> bool {
         self.files.contains_key(name)
     }
 
+    /// Returns `true` if the directory contains a subdirectory with the given name
     pub(super) fn contains_dir(&self, name: &str) -> bool {
         self.directories.contains(name)
     }
 
-    #[allow(dead_code)]
+    /// Apply the given function to all file payloads in the directory
     pub(super) fn map<U, F: FnMut(T) -> U>(self, mut f: F) -> Directory<U> {
         Directory {
             path: self.path,
@@ -286,14 +393,30 @@ impl<T> Directory<T> {
     }
 }
 
+/// Error returned by [`TreeTracker::add()`]
 #[derive(Clone, Debug, Eq, Error, PartialEq)]
 pub(super) enum TreeTrackerError {
+    /// The given key is lexicographically less than the previously-added key
     #[error("received keys in unsorted order: {before:?} came before {after:?}")]
-    Unsorted { before: String, after: String },
+    Unsorted {
+        /// The previously-added key
+        before: String,
+
+        /// The key passed to the [`TreeTracker::add()`] call
+        after: String,
+    },
+
+    /// A path was registered as both a file and a directory
     #[error("path {0:?} is used as both a file and a directory")]
     Conflict(String),
+
+    /// The given key was provided with an `old_filename` of `None`, and this
+    /// is the second time that happened.
     #[error("file key {0:?} encountered more than once")]
     DuplicateFile(String),
+
+    /// The given key was provided with a non-`None` `old_filename`, and this
+    /// is the second time that key & old filename were provided.
     #[error("key {key:?} has multiple non-latest versions with filename {old_filename:?}")]
     DuplicateOldFile { key: String, old_filename: String },
 }

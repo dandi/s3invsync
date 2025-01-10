@@ -15,6 +15,7 @@ use thiserror::Error;
 pub(crate) struct KeyPath(String);
 
 impl KeyPath {
+    /// Return the filename portion of the path
     pub(crate) fn name(&self) -> &str {
         self.0
             .split('/')

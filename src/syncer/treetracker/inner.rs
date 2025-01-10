@@ -3,13 +3,22 @@ use either::Either;
 use std::cmp::Ordering;
 use std::collections::HashMap;
 
+/// An "open" directory within a [`TreeTracker`][super::TreeTracker], i.e., one
+/// to which keys are currently being added (either directly or to a descendant
+/// directory)
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct PartialDirectory<T> {
+    /// All files & directories in this directory that have been seen so far,
+    /// excluding `current_subdir`
     pub(super) entries: Vec<Entry<T>>,
+
+    /// The name of the subdirectory of this directory that is currently
+    /// "open", if any
     pub(super) current_subdir: Option<String>,
 }
 
 impl<T> PartialDirectory<T> {
+    /// Create a new, empty `PartialDirectory`
     pub(super) fn new() -> Self {
         PartialDirectory {
             entries: Vec::new(),
@@ -17,10 +26,17 @@ impl<T> PartialDirectory<T> {
         }
     }
 
+    /// Returns true if the directory is empty, i.e., if no entries have been
+    /// registered in it
     pub(super) fn is_empty(&self) -> bool {
         self.entries.is_empty() && self.current_subdir.is_none()
     }
 
+    /// Mark the current "open" subdirectory as closed, adding to `entries`
+    ///
+    /// # Panics
+    ///
+    /// Panics if there is no current open subdirectory.
     pub(super) fn close_current(&mut self) {
         let Some(name) = self.current_subdir.take() else {
             panic!("PartialDirectory::close_current() called without a current directory");
@@ -28,10 +44,13 @@ impl<T> PartialDirectory<T> {
         self.entries.push(Entry::dir(name));
     }
 
+    /// Returns true if the last entry added to this directory is a subdirectory
     pub(super) fn last_entry_is_dir(&self) -> bool {
         self.current_subdir.is_some()
     }
 
+    /// Compare `cname` against the name of the last entry added to this
+    /// directory
     pub(super) fn cmp_vs_last_entry(&self, cname: CmpName<'_>) -> Option<Ordering> {
         self.current_subdir
             .as_deref()
@@ -40,19 +59,33 @@ impl<T> PartialDirectory<T> {
     }
 }
 
+/// A file or directory entry in an "open" directory tracked by
+/// [`TreeTracker`][super::TreeTracker]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) enum Entry<T> {
     File {
+        /// The filename
         name: String,
+
+        /// If the latest version of the corresponding key has been added, this
+        /// is its payload.
         value: Option<T>,
+
+        /// Mapping from "old filenames" registered for the key to their
+        /// payloads
         old_filenames: HashMap<String, T>,
     },
     Dir {
+        /// The name of the directory
         name: String,
     },
 }
 
 impl<T> Entry<T> {
+    /// Create a new `Entry::File` with the given `name`.  If `old_filename` is
+    /// `None`, `value` is used as the payload for the latest version of the
+    /// key; otherwise, the given old filename is registered with `value` as
+    /// its payload.
     pub(super) fn file<S: Into<String>>(
         name: S,
         value: T,
@@ -73,10 +106,12 @@ impl<T> Entry<T> {
         }
     }
 
+    /// Create a new `Entry::Dir` with the given `name`
     pub(super) fn dir<S: Into<String>>(name: S) -> Entry<T> {
         Entry::Dir { name: name.into() }
     }
 
+    /// Returns the name of the entry
     pub(super) fn name(&self) -> &str {
         match self {
             Entry::File { name, .. } => name,
@@ -84,6 +119,7 @@ impl<T> Entry<T> {
         }
     }
 
+    /// Returns the name of the entry as a [`CmpName`]
     pub(super) fn cmp_name(&self) -> CmpName<'_> {
         match self {
             Entry::File { name, .. } => CmpName::File(name.as_ref()),
@@ -104,6 +140,7 @@ pub(super) enum CmpName<'a> {
 }
 
 impl CmpName<'_> {
+    /// Returns the inner name, without any trailing slashes
     pub(super) fn name(&self) -> &str {
         match self {
             CmpName::File(s) => s,
@@ -111,6 +148,8 @@ impl CmpName<'_> {
         }
     }
 
+    /// Returns an iterator over all characters in the name.  If the name is
+    /// for a directory, a `'/'` is emitted at the end of the iterator.
     pub(super) fn chars(&self) -> impl Iterator<Item = char> + '_ {
         match self {
             CmpName::File(s) => Either::Left(s.chars()),
@@ -143,6 +182,7 @@ impl Ord for CmpName<'_> {
     }
 }
 
+/// An iterator over the path components of a key path
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct KeyComponents<'a, T> {
     i: usize,
@@ -180,9 +220,13 @@ impl<'a, T> Iterator for KeyComponents<'a, T> {
     }
 }
 
+/// A path component of a key path
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) enum Component<'a, T> {
+    /// `name` (no trailing slash)
     Dir(&'a str),
+
+    /// `name`, `value`, `old_filename`
     File(&'a str, T, Option<String>),
 }
 

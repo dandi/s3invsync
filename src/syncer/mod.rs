@@ -252,6 +252,8 @@ impl Syncer {
         Ok(firsts2fspecs.into_values().collect())
     }
 
+    /// Run the given future to completion, cancelling it if `token` is
+    /// cancelled, in which case `Ok(())` is returned.
     fn until_cancelled_ok<Fut>(
         &self,
         fut: Fut,
@@ -259,10 +261,16 @@ impl Syncer {
     where
         Fut: Future<Output = anyhow::Result<()>> + Send + 'static,
     {
+        // Use an async block instead of making the method async so that the
+        // future won't capture &self and thus will be 'static
         let token = self.token.clone();
         async move { token.run_until_cancelled(fut).await.unwrap_or(Ok(())) }
     }
 
+    /// Wait for all tasks in a nursery to complete.  If any errors occur,
+    /// [`Syncer::shutdown()`] is called, and a [`MultiError`] of all errors
+    /// (including a message about Ctrl-C being received if that happened) is
+    /// returned.
     async fn await_nursery(
         &self,
         mut stream: NurseryStream<anyhow::Result<()>>,
