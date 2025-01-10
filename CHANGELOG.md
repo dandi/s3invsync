@@ -7,6 +7,8 @@ In Development
   current directory
 - The `--inventory-jobs` and `--object-jobs` options have been eliminated in
   favor of a new `--jobs` option
+- Files & directories in the backup tree that are not listed in the inventory
+  are deleted
 
 v0.1.0-alpha.2 (2025-01-06)
 ---------------------------

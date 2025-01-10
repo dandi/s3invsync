@@ -92,7 +92,9 @@ When downloading a given key from S3, the latest version (if not deleted) is
 stored at `{outdir}/{key}`, and the versionIds and etags of all latest object
 versions in a given directory are stored in `.s3invsync.versions.json` in that
 directory.  Each non-latest, non-deleted version of a given key is stored at
-`{outdir}/{key}.old.{versionId}.{etag}`.
+`{outdir}/{key}.old.{versionId}.{etag}`.  Any other files or directories under
+`<outdir>` that do not correspond to an object listed in the inventory are
+deleted.
 
 Options
 -------
