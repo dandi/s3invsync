@@ -18,12 +18,6 @@ impl<T> TreeTracker<T> {
         //old_filename: Option<String>, // TODO
         value: T,
     ) -> Result<Vec<Directory<T>>, TreeTrackerError> {
-        fn after_error(key: &KeyPath, mut e: TreeTrackerError) -> TreeTrackerError {
-            if let TreeTrackerError::Unsorted { ref mut after, .. } = e {
-                *after = key.into();
-            }
-            e
-        }
         let mut popped_dirs = Vec::new();
         let mut partiter = KeyComponents::new(key, value);
         while let Some((i, part)) = partiter.next() {
@@ -43,8 +37,7 @@ impl<T> TreeTracker<T> {
                                     popped_dirs.push(self.pop());
                                 }
                             }
-                            self.push_file(name, value)
-                                .map_err(|e| after_error(key, e))?;
+                            self.push_file(name, value);
                             break;
                         }
                         (true, Some(Ordering::Equal)) => {
@@ -66,8 +59,7 @@ impl<T> TreeTracker<T> {
                                 self.is_empty(),
                                 "top dir of TreeTracker should be root when empty"
                             );
-                            self.push_file(name, value)
-                                .map_err(|e| after_error(key, e))?;
+                            self.push_file(name, value);
                             break;
                         }
                     }
@@ -81,8 +73,7 @@ impl<T> TreeTracker<T> {
                                     popped_dirs.push(self.pop());
                                 }
                             }
-                            self.push_parts(name, partiter)
-                                .map_err(|e| after_error(key, e))?;
+                            self.push_parts(name, partiter);
                             break;
                         }
                         (true, Some(Ordering::Equal)) => continue,
@@ -100,8 +91,7 @@ impl<T> TreeTracker<T> {
                                 self.is_empty(),
                                 "top dir of TreeTracker should be root when empty"
                             );
-                            self.push_parts(name, partiter)
-                                .map_err(|e| after_error(key, e))?;
+                            self.push_parts(name, partiter);
                             break;
                         }
                     }
@@ -123,19 +113,14 @@ impl<T> TreeTracker<T> {
         self.0.is_empty() || (self.0.len() == 1 && self.0[0].is_empty())
     }
 
-    fn push_parts(
-        &mut self,
-        first_dirname: &str,
-        rest: KeyComponents<'_, T>,
-    ) -> Result<(), TreeTrackerError> {
+    fn push_parts(&mut self, first_dirname: &str, rest: KeyComponents<'_, T>) {
         self.push_dir(first_dirname);
         for (_, part) in rest {
             match part {
                 Component::Dir(name) => self.push_dir(name),
-                Component::File(name, value) => self.push_file(name, value)?,
+                Component::File(name, value) => self.push_file(name, value),
             }
         }
-        Ok(())
     }
 
     fn push_dir(&mut self, name: &str) {
@@ -150,7 +135,7 @@ impl<T> TreeTracker<T> {
         self.0.push(PartialDirectory::new());
     }
 
-    fn push_file(&mut self, name: &str, value: T) -> Result<(), TreeTrackerError> {
+    fn push_file(&mut self, name: &str, value: T) {
         let Some(pd) = self.0.last_mut() else {
             panic!("TreeTracker::push_file() called on void tracker");
         };
@@ -159,21 +144,14 @@ impl<T> TreeTracker<T> {
             "TreeTracker::push_file() called when top dir has subdir"
         );
         if let Some(en) = pd.entries.last() {
-            match CmpName::File(name).cmp(&en.cmp_name()) {
-                Ordering::Equal => return Err(TreeTrackerError::DuplicateFile(self.last_key())),
-                // IMPORTANT: The `after` needs to be replaced with the full path in the
-                // calling context:
-                Ordering::Less => {
-                    return Err(TreeTrackerError::Unsorted {
-                        before: self.last_key(),
-                        after: name.into(),
-                    })
-                }
-                Ordering::Greater => (),
-            }
+            // The following assert should not fail, due to the code leading up
+            // to it in `add()`
+            assert!(
+                CmpName::File(name) > en.cmp_name(),
+                "TreeTracker::push_file() called with filename not after previous name"
+            );
         }
         pd.entries.push(Entry::file(name, value));
-        Ok(())
     }
 
     fn pop(&mut self) -> Directory<T> {
