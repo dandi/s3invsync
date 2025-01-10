@@ -14,6 +14,7 @@ use async_executors::TokioTpBuilder;
 use async_nursery::{NurseExt, Nursery, NurseryStream};
 use futures_util::StreamExt;
 use std::collections::BTreeMap;
+use std::future::Future;
 use std::io::ErrorKind;
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
@@ -136,12 +137,10 @@ impl Syncer {
         };
 
         let this = self.clone();
-        let token = self.token.clone();
         let sender = obj_sender.clone();
         let subnursery = nursery.clone();
-        let _ = nursery.nurse(async move {
-            let inner_token = token.clone();
-            token.run_until_cancelled(async move {
+        let _ = nursery.nurse(
+            self.until_cancelled_ok(async move {
                 let mut tracker = TreeTracker::new();
                 for spec in fspecs {
                     let entries = this.client.download_inventory_csv(spec).await?;
@@ -155,11 +154,10 @@ impl Syncer {
                                     let notify = Arc::new(Notify::new());
                                     for dir in tracker.add(&item.key, notify.clone(), None)? {
                                         let _ = subnursery.nurse({
-                                            let this = this.clone();
-                                            let token = inner_token.clone();
-                                            async move {
-                                                token.run_until_cancelled(async move { this.cleanup_dir(dir).await }).await.unwrap_or(Ok(()))
-                                            }
+                                            this.until_cancelled_ok({
+                                                let this = this.clone();
+                                                async move { this.cleanup_dir(dir).await }
+                                            })
                                         });
                                     }
                                     Some(notify)
@@ -176,16 +174,15 @@ impl Syncer {
                 }
                 for dir in tracker.finish() {
                     let _ = subnursery.nurse({
-                        let this = this.clone();
-                        let token = inner_token.clone();
-                        async move {
-                            token.run_until_cancelled(async move { this.cleanup_dir(dir).await }).await.unwrap_or(Ok(()))
-                        }
+                        this.until_cancelled_ok({
+                            let this = this.clone();
+                            async move { this.cleanup_dir(dir).await }
+                        })
                     });
                 }
                 Ok(())
-            }).await.unwrap_or(Ok(()))
-        });
+            })
+        );
         drop(obj_sender);
         {
             let mut guard = self
@@ -236,29 +233,22 @@ impl Syncer {
             let (output_sender, output_receiver) = tokio::sync::mpsc::channel(CHANNEL_SIZE);
             for _ in 0..self.jobs.get() {
                 let clnt = self.client.clone();
-                let token = self.token.clone();
                 let specs = specs.clone();
                 let sender = output_sender.clone();
-                let _ = nursery.nurse(async move {
-                    token
-                        .run_until_cancelled(async move {
-                            while let Some(fspec) = {
-                                let mut guard =
-                                    specs.lock().expect("specs mutex should not be poisoned");
-                                guard.pop()
-                            } {
-                                if let Some(entry) = clnt.peek_inventory_csv(&fspec).await? {
-                                    if sender.send((fspec, entry)).await.is_err() {
-                                        // Assume we're shutting down
-                                        return Ok(());
-                                    }
-                                }
+                let _ = nursery.nurse(self.until_cancelled_ok(async move {
+                    while let Some(fspec) = {
+                        let mut guard = specs.lock().expect("specs mutex should not be poisoned");
+                        guard.pop()
+                    } {
+                        if let Some(entry) = clnt.peek_inventory_csv(&fspec).await? {
+                            if sender.send((fspec, entry)).await.is_err() {
+                                // Assume we're shutting down
+                                return Ok(());
                             }
-                            Ok(())
-                        })
-                        .await
-                        .unwrap_or(Ok(()))
-                });
+                        }
+                    }
+                    Ok(())
+                }));
             }
             output_receiver
         };
@@ -269,6 +259,17 @@ impl Syncer {
         }
         self.await_nursery(nursery_stream).await?;
         Ok(firsts2fspecs.into_values().collect())
+    }
+
+    fn until_cancelled_ok<Fut>(
+        &self,
+        fut: Fut,
+    ) -> impl Future<Output = anyhow::Result<()>> + Send + 'static
+    where
+        Fut: Future<Output = anyhow::Result<()>> + Send + 'static,
+    {
+        let token = self.token.clone();
+        async move { token.run_until_cancelled(fut).await.unwrap_or(Ok(())) }
     }
 
     async fn await_nursery(
