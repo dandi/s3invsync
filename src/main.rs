@@ -2,6 +2,7 @@ mod consts;
 mod inventory;
 mod keypath;
 mod manifest;
+mod nursery;
 mod s3;
 mod syncer;
 mod timestamps;

@@ -6,12 +6,11 @@ use crate::consts::METADATA_FILENAME;
 use crate::inventory::{InventoryEntry, InventoryItem, ItemDetails};
 use crate::keypath::is_special_component;
 use crate::manifest::{CsvManifest, FileSpec};
+use crate::nursery::{Nursery, NurseryStream};
 use crate::s3::S3Client;
 use crate::timestamps::DateHM;
 use crate::util::*;
 use anyhow::Context;
-use async_executors::TokioTpBuilder;
-use async_nursery::{NurseExt, Nursery, NurseryStream};
 use futures_util::StreamExt;
 use std::collections::BTreeMap;
 use std::future::Future;
@@ -120,11 +119,7 @@ impl Syncer {
 
         tracing::trace!(path = %self.outdir.display(), "Creating root output directory");
         fs_err::create_dir_all(&self.outdir).map_err(|e| MultiError(vec![e.into()]))?;
-        let (nursery, nursery_stream) = Nursery::new(
-            TokioTpBuilder::new()
-                .build()
-                .expect("building tokio runtime should not fail"),
-        );
+        let (nursery, nursery_stream) = Nursery::new();
         let obj_sender = {
             let guard = self
                 .obj_sender
@@ -139,7 +134,7 @@ impl Syncer {
         let this = self.clone();
         let sender = obj_sender.clone();
         let subnursery = nursery.clone();
-        let _ = nursery.nurse(
+        nursery.spawn(
             self.until_cancelled_ok(async move {
                 let mut tracker = TreeTracker::new();
                 for spec in fspecs {
@@ -153,7 +148,7 @@ impl Syncer {
                                 let notify = if !item.is_deleted() {
                                     let notify = Arc::new(Notify::new());
                                     for dir in tracker.add(&item.key, notify.clone(), None)? {
-                                        let _ = subnursery.nurse({
+                                        subnursery.spawn({
                                             this.until_cancelled_ok({
                                                 let this = this.clone();
                                                 async move { this.cleanup_dir(dir).await }
@@ -173,7 +168,7 @@ impl Syncer {
                     }
                 }
                 for dir in tracker.finish() {
-                    let _ = subnursery.nurse({
+                    subnursery.spawn({
                         this.until_cancelled_ok({
                             let this = this.clone();
                             async move { this.cleanup_dir(dir).await }
@@ -195,7 +190,7 @@ impl Syncer {
         for _ in 0..self.jobs.get() {
             let this = self.clone();
             let recv = self.obj_receiver.clone();
-            let _ = nursery.nurse(async move {
+            nursery.spawn(async move {
                 while let Ok((item, notify)) = recv.recv().await {
                     if this.token.is_cancelled() {
                         return Ok(());
@@ -223,11 +218,7 @@ impl Syncer {
         specs: Vec<FileSpec>,
     ) -> Result<Vec<FileSpec>, MultiError> {
         tracing::info!("Peeking at inventory lists in order to sort by first line ...");
-        let (nursery, nursery_stream) = Nursery::new(
-            TokioTpBuilder::new()
-                .build()
-                .expect("building tokio runtime should not fail"),
-        );
+        let (nursery, nursery_stream) = Nursery::new();
         let mut receiver = {
             let specs = Arc::new(Mutex::new(specs));
             let (output_sender, output_receiver) = tokio::sync::mpsc::channel(CHANNEL_SIZE);
@@ -235,7 +226,7 @@ impl Syncer {
                 let clnt = self.client.clone();
                 let specs = specs.clone();
                 let sender = output_sender.clone();
-                let _ = nursery.nurse(self.until_cancelled_ok(async move {
+                nursery.spawn(self.until_cancelled_ok(async move {
                     while let Some(fspec) = {
                         let mut guard = specs.lock().expect("specs mutex should not be poisoned");
                         guard.pop()
