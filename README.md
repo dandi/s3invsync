@@ -20,28 +20,54 @@ supported, and the CSVs are required to list at least the `Bucket`, `Key`,
 planned features have not been implemented yet.
 
 
-Building & Running
-==================
+Installation
+============
 
-1. [Install Rust and Cargo](https://www.rust-lang.org/tools/install).
+Installing the Latest Release
+-----------------------------
 
-2. Clone this repository and `cd` into it.
+`s3invsync` provides pre-built binaries for the most common platforms as GitHub
+release assets.  Simply download the asset for your platform from the latest
+release on [the releases page](https://github.com/dandi/s3invsync/releases),
+unzip it, and place the `s3invsync` or `s3invsync.exe` file inside somewhere on
+your `$PATH`.
 
-3. Run `cargo build --release` to build the binary.  The intermediate build
-   artifacts will be cached in `target/` in order to speed up subsequent
-   builds.
+Alternatively, if you have
+[`cargo-binstall`](https://github.com/cargo-bins/cargo-binstall), you can
+install or update to the latest release asset with a single command:
 
-4. Run with `cargo run --release -- <arguments ...>`.
+    cargo binstall --git https://github.com/dandi/s3invsync s3invsync
 
-5. If necessary, the actual binary can be found in `target/release/s3invsync`.
-   It should run on any system with the same OS and architecture as it was
-   built on.
+Installing the Latest Development Code
+--------------------------------------
+
+In order to build and/or install `s3invsync` from source, you first need to
+[install Rust and Cargo](https://www.rust-lang.org/tools/install).  You can
+then download & build the program source and install it to `~/.cargo/bin` by
+running:
+
+    cargo install --git https://github.com/dandi/s3invsync
+
+See the [`cargo
+install`](https://doc.rust-lang.org/cargo/commands/cargo-install.html)
+documentation for further options.
+
+Alternatively, you can clone this repository manually and then build a binary
+localized to the clone by running `cargo build` (or `cargo build --release` to
+enable optimizations) inside it.  The resulting binary can then be run with
+`cargo run -- <arguments>` (or `cargo run --release -- <arguments>` to use
+optimizations).  The binary file itself is located at either
+`target/debug/s3invsync` or `target/release/s3invsync`, depending on whether
+`--release` was supplied.  See the [`cargo
+build`](https://doc.rust-lang.org/cargo/commands/cargo-build.html) and [`cargo
+run`](https://doc.rust-lang.org/cargo/commands/cargo-run.html) documentation
+for further options.
 
 
 Usage
 =====
 
-    cargo run --release -- [<options>] <inventory-base> <outdir>
+    s3invsync [<options>] <inventory-base> <outdir>
 
 `s3invsync` downloads the contents of an S3 bucket, including old versions of
 objects, to the directory `<outdir>` using S3 Inventory files located at
@@ -96,5 +122,5 @@ Options
 - `--path-filter <REGEX>` — Only download objects whose keys match the given
   [regular expression](https://docs.rs/regex/latest/regex/#syntax)
 
-- `--trace-progress` — Emit download progress information at the TRACE level.
+- `--trace-progress` — Emit per-object download progress at the TRACE level.
   This is off by default because it can make for some very noisy logs.
