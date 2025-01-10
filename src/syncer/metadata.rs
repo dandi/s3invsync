@@ -1,5 +1,6 @@
 use super::*;
 use serde::{Deserialize, Serialize};
+use std::io::ErrorKind;
 
 /// Metadata about the latest version of a key
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

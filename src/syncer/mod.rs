@@ -525,7 +525,12 @@ impl Syncer {
         let mut files_to_delete = Vec::new();
         let mut dirs_to_delete = Vec::new();
         let mut dbdeletions = Vec::new();
-        for entry in fs_err::read_dir(&dirpath)? {
+        let iter = match fs_err::read_dir(&dirpath) {
+            Ok(iter) => iter,
+            Err(e) if e.kind() == ErrorKind::NotFound => return Ok(()),
+            Err(e) => return Err(e.into()),
+        };
+        for entry in iter {
             let entry = entry?;
             let is_dir = entry.file_type()?.is_dir();
             let to_delete = match entry.file_name().to_str() {
