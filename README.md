@@ -67,10 +67,11 @@ for further options.
 Usage
 =====
 
-    s3invsync [<options>] <inventory-base> <outdir>
+    s3invsync [<options>] <inventory-base> [<outdir>]
 
 `s3invsync` downloads the contents of an S3 bucket, including old versions of
-objects, to the directory `<outdir>` using S3 Inventory files located at
+objects, to the directory `<outdir>` (defaulting to the current working
+directory if not specified) using S3 Inventory files located at
 `<inventory-base>`.
 
 `<inventory-base>` must be of the form `s3://{bucket}/{prefix}/`, where
@@ -111,6 +112,9 @@ Options
 
 - `-I <INT>`, `--inventory-jobs <INT>` — Specify the maximum number of inventory
   list files to download & process at once [default: 20]
+
+- `--list-dates` — List available inventory manifest dates instead of
+  backing anything up
 
 - `-l <level>`, `--log-level <level>` — Set the log level to the given value.
   Possible values are  "`ERROR`", "`WARN`", "`INFO`", "`DEBUG`", and "`TRACE`"

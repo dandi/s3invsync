@@ -11,6 +11,7 @@ use crate::syncer::Syncer;
 use crate::timestamps::DateMaybeHM;
 use anyhow::Context;
 use clap::Parser;
+use futures_util::TryStreamExt;
 use std::io::{stderr, IsTerminal};
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
@@ -42,6 +43,10 @@ struct Arguments {
     /// once
     #[arg(short = 'I', long, default_value = "20")]
     inventory_jobs: NonZeroUsize,
+
+    /// List available inventory manifest dates instead of backing anything up
+    #[arg(long)]
+    list_dates: bool,
 
     /// Set logging level
     #[arg(
@@ -75,8 +80,9 @@ struct Arguments {
     /// a key for a manifest file).
     inventory_base: S3Location,
 
-    /// Directory in which to download the S3 objects
-    outdir: PathBuf,
+    /// Directory in which to download the S3 objects.  Defaults to the current
+    /// working directory.
+    outdir: Option<PathBuf>,
 }
 
 // See
@@ -111,20 +117,31 @@ async fn run(args: Arguments) -> anyhow::Result<()> {
     let region = get_bucket_region(args.inventory_base.bucket()).await?;
     tracing::info!(%bucket, %region, "Found S3 bucket region");
     let client = S3Client::new(region, args.inventory_base, args.trace_progress).await?;
-    tracing::info!("Fetching manifest ...");
-    let (manifest, manifest_date) = client.get_manifest_for_date(args.date).await?;
-    let syncer = Syncer::new(
-        client,
-        args.outdir,
-        manifest_date,
-        start_time,
-        args.inventory_jobs,
-        args.object_jobs,
-        args.path_filter,
-        args.compress_filter_msgs,
-    );
-    tracing::info!("Starting backup ...");
-    syncer.run(manifest).await?;
-    tracing::info!("Backup complete");
+    if args.list_dates {
+        let mut stream = client.list_all_manifest_timestamps();
+        while let Some(date) = stream.try_next().await? {
+            println!("{date}");
+        }
+    } else {
+        let outdir = match args.outdir {
+            Some(p) => p,
+            None => std::env::current_dir().context("failed to determine current directory")?,
+        };
+        tracing::info!("Fetching manifest ...");
+        let (manifest, manifest_date) = client.get_manifest_for_date(args.date).await?;
+        let syncer = Syncer::new(
+            client,
+            outdir,
+            manifest_date,
+            start_time,
+            args.inventory_jobs,
+            args.object_jobs,
+            args.path_filter,
+            args.compress_filter_msgs,
+        );
+        tracing::info!("Starting backup ...");
+        syncer.run(manifest).await?;
+        tracing::info!("Backup complete");
+    }
     Ok(())
 }

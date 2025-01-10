@@ -119,6 +119,11 @@ impl S3Client {
         Ok((manifest, ts))
     }
 
+    /// Returns a stream yielding all available inventory manifest timestamps
+    pub(crate) fn list_all_manifest_timestamps(&self) -> ListManifestDates {
+        ListManifestDates::new(self, &self.inventory_base)
+    }
+
     /// Return the full timestamp for the latest manifest, either (if `day` is
     /// `None`) out of all manifests or else the latest on the given date.
     #[tracing::instrument(skip_all, fields(day = day.map(|d| d.to_string())))]
