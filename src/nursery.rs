@@ -6,7 +6,7 @@ use std::task::{ready, Context, Poll};
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 
 /// Type returned by [`FutureExt::catch_unwind()`].  If the inner task ran to
-/// completion, this is `Ok`; otherwise, if the taks panicked, this is `Err`.
+/// completion, this is `Ok`; otherwise, if the task panicked, this is `Err`.
 type UnwindResult<T> = Result<T, Box<dyn std::any::Any + Send>>;
 
 /// A handle for spawning new tasks in a task group/nursery.
