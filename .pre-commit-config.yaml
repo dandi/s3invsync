@@ -17,7 +17,7 @@ repos:
       - id: fmt
 
   - repo: https://github.com/codespell-project/codespell
-    # Configuration for codespell is in $config
+    # Configuration for codespell is in .codespellrc
     rev: v2.3.0
     hooks:
       - id: codespell
