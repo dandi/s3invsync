@@ -171,6 +171,23 @@ mod tests {
     use rstest::rstest;
 
     #[rstest]
+    #[case("foo", "foo")]
+    #[case("foo/bar/baz", "baz")]
+    fn test_name(#[case] p: KeyPath, #[case] name: &str) {
+        assert_eq!(p.name(), name);
+    }
+
+    #[rstest]
+    #[case("foo", None, "foo")]
+    #[case("foo/bar", Some("foo"), "bar")]
+    #[case("foo/bar/baz", Some("foo/bar"), "baz")]
+    fn test_split(#[case] p: KeyPath, #[case] dirname: Option<&str>, #[case] filename: &str) {
+        let (d, f) = p.split();
+        assert_eq!(d, dirname);
+        assert_eq!(f, filename);
+    }
+
+    #[rstest]
     #[case("foo.nwb")]
     #[case("foo/bar.nwb")]
     fn test_good_paths(#[case] s: &str) {
