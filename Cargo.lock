@@ -1796,6 +1796,7 @@ dependencies = [
  "md-5",
  "memory-stats",
  "percent-encoding",
+ "pin-project-lite",
  "regex",
  "rstest",
  "serde",
