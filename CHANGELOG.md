@@ -10,6 +10,8 @@ In Development
 - Files & directories in the backup tree that are not listed in the inventory
   are deleted
 - Increased MSRV to 1.81
+- The temporary file used to download a manifest is now deleted immediately
+  after parsing the manifest
 
 v0.1.0-alpha.2 (2025-01-06)
 ---------------------------

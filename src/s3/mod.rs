@@ -194,7 +194,7 @@ impl S3Client {
             .trim();
         tracing::debug!("Fetching manifest.json file");
         let manifest_url = self.inventory_base.join(&format!("{when}/manifest.json"));
-        let (mut manifest_file, _) = self.make_dl_tempfile(
+        let (mut manifest_file, manifest_path) = self.make_dl_tempfile(
             &PathBuf::from(format!("manifests/{when}.json")),
             &manifest_url,
         )?;
@@ -211,6 +211,7 @@ impl S3Client {
                 url: manifest_url,
                 source,
             })?;
+        let _ = std::fs::remove_file(manifest_path);
         Ok(manifest)
     }
 
