@@ -3,7 +3,8 @@ mod location;
 mod streams;
 pub(crate) use self::location::S3Location;
 use self::streams::{ListManifestDates, ListObjectsError};
-use crate::inventory::{CsvReader, InventoryList};
+use crate::consts::CSV_GZIP_PEEK_SIZE;
+use crate::inventory::{CsvReader, CsvReaderError, InventoryEntry, InventoryList};
 use crate::manifest::{CsvManifest, FileSpec};
 use crate::timestamps::{Date, DateHM, DateMaybeHM};
 use aws_credential_types::{
@@ -240,6 +241,39 @@ impl S3Client {
         Ok(InventoryList::for_downloaded_csv(path, url, reader))
     }
 
+    /// Fetch the first [`CSV_GZIP_PEEK_SIZE`] bytes of the CSV inventory list
+    /// file described by `fspec` and extract the first line.  Returns `None`
+    /// if the file is empty.
+    #[tracing::instrument(skip_all, fields(key = fspec.key))]
+    pub(crate) async fn peek_inventory_csv(
+        &self,
+        fspec: &FileSpec,
+    ) -> Result<Option<InventoryEntry>, CsvPeekError> {
+        tracing::debug!("Peeking at first {CSV_GZIP_PEEK_SIZE} bytes of file");
+        let url = self.inventory_base.with_key(&fspec.key);
+        let obj = self.get_object(&url).await?;
+        let mut bytestream = obj.body;
+        let mut header = std::collections::VecDeque::with_capacity(CSV_GZIP_PEEK_SIZE);
+        while let Some(blob) =
+            bytestream
+                .try_next()
+                .await
+                .map_err(|source| CsvPeekError::Download {
+                    url: url.clone(),
+                    source,
+                })?
+        {
+            header.extend(blob);
+            if header.len() >= CSV_GZIP_PEEK_SIZE {
+                break;
+            }
+        }
+        CsvReader::from_gzipped_reader(header, fspec.file_schema.clone())
+            .next()
+            .transpose()
+            .map_err(|source| CsvPeekError::Decode { url, source })
+    }
+
     /// Download the object at `url` and write its bytes to `outfile`.  If
     /// `md5_digest` is non-`None` (in which case it must be a 32-character
     /// lowercase hexadecimal string), it is used to validate the download.
@@ -439,6 +473,28 @@ pub(crate) enum CsvDownloadError {
     Rewind {
         url: S3Location,
         source: std::io::Error,
+    },
+}
+
+/// Error returned by [`S3Client::peek_inventory_csv()`]
+#[derive(Debug, Error)]
+pub(crate) enum CsvPeekError {
+    /// Failed to perform "Get Object" request
+    #[error(transparent)]
+    Get(#[from] GetError),
+
+    /// Error while receiving bytes for the object
+    #[error("failed downloading contents for {url}")]
+    Download {
+        url: S3Location,
+        source: ByteStreamError,
+    },
+
+    /// Failed to read first line from header
+    #[error("failed to decode first line from peeking at {url}")]
+    Decode {
+        url: S3Location,
+        source: CsvReaderError,
     },
 }
 

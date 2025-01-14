@@ -1,5 +1,6 @@
 use crate::keypath::KeyPath;
 use crate::s3::S3Location;
+use crate::util::make_old_filename;
 use time::OffsetDateTime;
 
 /// An entry in an inventory list file
@@ -7,6 +8,16 @@ use time::OffsetDateTime;
 pub(crate) enum InventoryEntry {
     Directory(Directory),
     Item(InventoryItem),
+}
+
+impl InventoryEntry {
+    /// Returns the entry's key
+    pub(crate) fn key(&self) -> &str {
+        match self {
+            InventoryEntry::Directory(Directory { key, .. }) => key,
+            InventoryEntry::Item(InventoryItem { key, .. }) => key.as_ref(),
+        }
+    }
 }
 
 /// An entry in an inventory list file pointing to a directory object
@@ -59,6 +70,20 @@ impl InventoryItem {
     pub(crate) fn url(&self) -> S3Location {
         S3Location::new(self.bucket.clone(), String::from(&self.key))
             .with_version_id(self.version_id.clone())
+    }
+
+    /// Returns whether the object is a delete marker
+    pub(crate) fn is_deleted(&self) -> bool {
+        self.details == ItemDetails::Deleted
+    }
+
+    /// If the object is not a delete marker and is not the latest version of
+    /// the key, return the base filename at which it will be backed up.
+    pub(crate) fn old_filename(&self) -> Option<String> {
+        let ItemDetails::Present { ref etag, .. } = self.details else {
+            return None;
+        };
+        (!self.is_latest).then(|| make_old_filename(self.key.name(), &self.version_id, etag))
     }
 }
 

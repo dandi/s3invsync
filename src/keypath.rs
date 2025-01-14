@@ -15,6 +15,14 @@ use thiserror::Error;
 pub(crate) struct KeyPath(String);
 
 impl KeyPath {
+    /// Return the filename portion of the path
+    pub(crate) fn name(&self) -> &str {
+        self.0
+            .split('/')
+            .next_back()
+            .expect("path should be nonempty")
+    }
+
     /// Split the path into the directory component (if any) and filename
     pub(crate) fn split(&self) -> (Option<&str>, &str) {
         match self.0.rsplit_once('/') {
@@ -163,6 +171,23 @@ mod tests {
     use rstest::rstest;
 
     #[rstest]
+    #[case("foo", "foo")]
+    #[case("foo/bar/baz", "baz")]
+    fn test_name(#[case] p: KeyPath, #[case] name: &str) {
+        assert_eq!(p.name(), name);
+    }
+
+    #[rstest]
+    #[case("foo", None, "foo")]
+    #[case("foo/bar", Some("foo"), "bar")]
+    #[case("foo/bar/baz", Some("foo/bar"), "baz")]
+    fn test_split(#[case] p: KeyPath, #[case] dirname: Option<&str>, #[case] filename: &str) {
+        let (d, f) = p.split();
+        assert_eq!(d, dirname);
+        assert_eq!(f, filename);
+    }
+
+    #[rstest]
     #[case("foo.nwb")]
     #[case("foo/bar.nwb")]
     fn test_good_paths(#[case] s: &str) {
@@ -200,6 +225,7 @@ mod tests {
     #[case(".old.bar.baz", false)]
     #[case("foo.old..baz", false)]
     #[case("foo.old..", false)]
+    #[case(".s3invsync.versions.json", true)]
     fn test_is_special_component(#[case] s: &str, #[case] r: bool) {
         assert_eq!(is_special_component(s), r);
     }

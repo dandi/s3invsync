@@ -1,7 +1,7 @@
 [![Project Status: WIP – Initial development is in progress, but there has not yet been a stable, usable release suitable for the public.](https://www.repostatus.org/badges/latest/wip.svg)](https://www.repostatus.org/#wip)
 [![CI Status](https://github.com/dandi/s3invsync/actions/workflows/test.yml/badge.svg)](https://github.com/dandi/s3invsync/actions/workflows/test.yml)
 [![codecov.io](https://codecov.io/gh/dandi/s3invsync/branch/main/graph/badge.svg)](https://codecov.io/gh/dandi/s3invsync)
-[![Minimum Supported Rust Version](https://img.shields.io/badge/MSRV-1.80-orange)](https://www.rust-lang.org)
+[![Minimum Supported Rust Version](https://img.shields.io/badge/MSRV-1.81-orange)](https://www.rust-lang.org)
 [![MIT License](https://img.shields.io/github/license/dandi/s3invsync.svg)](https://opensource.org/licenses/MIT)
 
 [GitHub](https://github.com/dandi/s3invsync) | [Issues](https://github.com/dandi/s3invsync/issues) | [Changelog](https://github.com/dandi/s3invsync/blob/main/CHANGELOG.md)
@@ -92,7 +92,9 @@ When downloading a given key from S3, the latest version (if not deleted) is
 stored at `{outdir}/{key}`, and the versionIds and etags of all latest object
 versions in a given directory are stored in `.s3invsync.versions.json` in that
 directory.  Each non-latest, non-deleted version of a given key is stored at
-`{outdir}/{key}.old.{versionId}.{etag}`.
+`{outdir}/{key}.old.{versionId}.{etag}`.  Any other files or directories under
+`<outdir>` that do not correspond to an object listed in the inventory are
+deleted.
 
 Options
 -------
@@ -110,8 +112,8 @@ Options
   inventory for the given date is used) or in the format `YYYY-MM-DDTHH-MMZ`
   (to specify a specific inventory).
 
-- `-I <INT>`, `--inventory-jobs <INT>` — Specify the maximum number of inventory
-  list files to download & process at once [default: 20]
+- `-J <INT>`, `--jobs <INT>` — Specify the maximum number of concurrent
+  download jobs [default: 20]
 
 - `--list-dates` — List available inventory manifest dates instead of
   backing anything up
@@ -119,9 +121,6 @@ Options
 - `-l <level>`, `--log-level <level>` — Set the log level to the given value.
   Possible values are  "`ERROR`", "`WARN`", "`INFO`", "`DEBUG`", and "`TRACE`"
   (all case-insensitive).  [default value: `DEBUG`]
-
-- `-O <INT>`, `--object-jobs <INT>` — Specify the maximum number of inventory
-  entries to download & process at once [default: 20]
 
 - `--path-filter <REGEX>` — Only download objects whose keys match the given
   [regular expression](https://docs.rs/regex/latest/regex/#syntax)

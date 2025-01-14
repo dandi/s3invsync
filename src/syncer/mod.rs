@@ -1,12 +1,19 @@
+mod metadata;
+mod treetracker;
+use self::metadata::*;
+use self::treetracker::*;
 use crate::consts::METADATA_FILENAME;
 use crate::inventory::{InventoryEntry, InventoryItem, ItemDetails};
-use crate::manifest::CsvManifest;
+use crate::keypath::is_special_component;
+use crate::manifest::{CsvManifest, FileSpec};
+use crate::nursery::{Nursery, NurseryStream};
 use crate::s3::S3Client;
 use crate::timestamps::DateHM;
 use crate::util::*;
 use anyhow::Context;
-use serde::{Deserialize, Serialize};
+use futures_util::StreamExt;
 use std::collections::BTreeMap;
+use std::future::Future;
 use std::io::ErrorKind;
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
@@ -14,7 +21,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc, Mutex,
 };
-use tokio::task::JoinSet;
+use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 
 /// Capacity of async channels
@@ -22,6 +29,8 @@ const CHANNEL_SIZE: usize = 65535;
 
 /// Lock guard returned by [`Syncer::lock_path()`]
 type Guard<'a> = <lockable::LockPool<PathBuf> as lockable::Lockable<PathBuf, ()>>::Guard<'a>;
+
+type ObjChannelItem = (InventoryItem, Option<Arc<Notify>>);
 
 /// Object responsible for syncing an S3 bucket to a local backup by means of
 /// the bucket's S3 Inventory
@@ -38,11 +47,8 @@ pub(crate) struct Syncer {
     /// The time at which the overall backup procedure started
     start_time: std::time::Instant,
 
-    /// The number of concurrent downloads of CSV inventory lists
-    inventory_jobs: NonZeroUsize,
-
-    /// The number of concurrent downloads of S3 objects
-    object_jobs: NonZeroUsize,
+    /// The number of concurrent downloads jobs
+    jobs: NonZeroUsize,
 
     /// Only download objects whose keys match the given regex
     path_filter: Option<regex::Regex>,
@@ -56,10 +62,10 @@ pub(crate) struct Syncer {
     /// A clone of the channel used for sending inventory entries off to be
     /// downloaded.  This is set to `None` after spawning all of the inventory
     /// list download tasks.
-    obj_sender: Mutex<Option<async_channel::Sender<InventoryItem>>>,
+    obj_sender: Mutex<Option<async_channel::Sender<ObjChannelItem>>>,
 
     /// A clone of the channel used for receiving inventory entries to download
-    obj_receiver: async_channel::Receiver<InventoryItem>,
+    obj_receiver: async_channel::Receiver<ObjChannelItem>,
 
     /// Whether the backup was terminated by Ctrl-C
     terminated: AtomicBool,
@@ -76,8 +82,7 @@ impl Syncer {
         outdir: PathBuf,
         manifest_date: DateHM,
         start_time: std::time::Instant,
-        inventory_jobs: NonZeroUsize,
-        object_jobs: NonZeroUsize,
+        jobs: NonZeroUsize,
         path_filter: Option<regex::Regex>,
         compress_filter_msgs: Option<NonZeroUsize>,
     ) -> Arc<Syncer> {
@@ -87,8 +92,7 @@ impl Syncer {
             outdir,
             manifest_date,
             start_time,
-            inventory_jobs,
-            object_jobs,
+            jobs,
             path_filter,
             locks: lockable::LockPool::new(),
             token: CancellationToken::new(),
@@ -100,6 +104,20 @@ impl Syncer {
     }
 
     pub(crate) async fn run(self: &Arc<Self>, manifest: CsvManifest) -> Result<(), MultiError> {
+        self.spawwn_cltrc_listener();
+        let fspecs = self.sort_csvs_by_first_line(manifest.files).await?;
+        tracing::trace!(path = %self.outdir.display(), "Creating root output directory");
+        fs_err::create_dir_all(&self.outdir).map_err(|e| MultiError(vec![e.into()]))?;
+        let (nursery, nursery_stream) = Nursery::new();
+        self.spawn_inventory_task(&nursery, fspecs);
+        self.spawn_object_tasks(&nursery);
+        drop(nursery);
+        let r = self.await_nursery(nursery_stream).await;
+        self.filterlog.finish();
+        r
+    }
+
+    fn spawwn_cltrc_listener(self: &Arc<Self>) {
         tokio::spawn({
             let this = self.clone();
             async move {
@@ -110,11 +128,13 @@ impl Syncer {
                 }
             }
         });
+    }
 
-        tracing::trace!(path = %self.outdir.display(), "Creating root output directory");
-        fs_err::create_dir_all(&self.outdir).map_err(|e| MultiError(vec![e.into()]))?;
-        let mut joinset = JoinSet::new();
-        let (fspec_sender, fspec_receiver) = async_channel::bounded(CHANNEL_SIZE);
+    fn spawn_inventory_task(
+        self: &Arc<Self>,
+        nursery: &Nursery<anyhow::Result<()>>,
+        fspecs: Vec<FileSpec>,
+    ) {
         let obj_sender = {
             let guard = self
                 .obj_sender
@@ -125,45 +145,52 @@ impl Syncer {
                 .cloned()
                 .expect("obj_sender should not be None")
         };
-
-        for _ in 0..self.inventory_jobs.get() {
-            let clnt = self.client.clone();
-            let token = self.token.clone();
-            let recv = fspec_receiver.clone();
-            let sender = obj_sender.clone();
-            joinset.spawn(async move {
-                while let Ok(fspec) = recv.recv().await {
-                    let clnt = clnt.clone();
-                    let sender = sender.clone();
-                    let r = token
-                        .run_until_cancelled(async move {
-                            let entries = clnt.download_inventory_csv(fspec).await?;
-                            for entry in entries {
-                                match entry? {
-                                    InventoryEntry::Directory(d) => {
-                                        tracing::debug!(url = %d.url(), "Ignoring directory entry in inventory list");
+        let this = self.clone();
+        let subnursery = nursery.clone();
+        nursery.spawn(
+            self.until_cancelled_ok(async move {
+                let mut tracker = TreeTracker::new();
+                for spec in fspecs {
+                    let entries = this.client.download_inventory_csv(spec).await?;
+                    for entry in entries {
+                        match entry.context("error reading from inventory list file")? {
+                            InventoryEntry::Directory(d) => {
+                                tracing::debug!(url = %d.url(), "Ignoring directory entry in inventory list");
+                            }
+                            InventoryEntry::Item(item) => {
+                                let notify = if !item.is_deleted() {
+                                    let notify = Arc::new(Notify::new());
+                                    for dir in tracker.add(&item.key, notify.clone(), item.old_filename())? {
+                                        subnursery.spawn({
+                                            this.until_cancelled_ok({
+                                                let this = this.clone();
+                                                async move { this.cleanup_dir(dir).await }
+                                            })
+                                        });
                                     }
-                                    InventoryEntry::Item(item) => {
-                                        if sender.send(item).await.is_err() {
-                                            // Assume we're shutting down
-                                            return Ok(());
-                                        }
-                                    }
+                                    Some(notify)
+                                } else {
+                                    None
+                                };
+                                if obj_sender.send((item, notify)).await.is_err() {
+                                    // Assume we're shutting down
+                                    return Ok(());
                                 }
                             }
-                            Ok(())
-                        })
-                        .await;
-                    match r {
-                        Some(Ok(())) => (),
-                        Some(Err(e)) => return Err(e),
-                        None => return Ok(()),
+                        }
                     }
                 }
+                for dir in tracker.finish() {
+                    subnursery.spawn({
+                        this.until_cancelled_ok({
+                            let this = this.clone();
+                            async move { this.cleanup_dir(dir).await }
+                        })
+                    });
+                }
                 Ok(())
-            });
-        }
-        drop(obj_sender);
+            })
+        );
         {
             let mut guard = self
                 .obj_sender
@@ -171,49 +198,103 @@ impl Syncer {
                 .expect("obj_sender mutex should not be poisoned");
             *guard = None;
         }
-        drop(fspec_receiver);
+    }
 
-        joinset.spawn(async move {
-            for fspec in manifest.files {
-                if fspec_sender.send(fspec).await.is_err() {
-                    return Ok(());
-                }
-            }
-            Ok(())
-        });
-
-        for _ in 0..self.object_jobs.get() {
+    fn spawn_object_tasks(self: &Arc<Self>, nursery: &Nursery<anyhow::Result<()>>) {
+        for _ in 0..self.jobs.get() {
             let this = self.clone();
             let recv = self.obj_receiver.clone();
-            joinset.spawn(async move {
-                while let Ok(item) = recv.recv().await {
+            nursery.spawn(async move {
+                while let Ok((item, notify)) = recv.recv().await {
                     if this.token.is_cancelled() {
                         return Ok(());
                     }
-                    Box::pin(this.process_item(item)).await?;
+                    let r = Box::pin(this.process_item(item)).await;
+                    if let Some(n) = notify {
+                        n.notify_one();
+                    }
+                    r?;
                 }
                 Ok(())
             });
         }
+    }
 
-        let mut errors = Vec::new();
-        while let Some(r) = joinset.join_next().await {
-            match r {
-                Ok(Ok(())) => (),
-                Ok(Err(e)) => {
-                    tracing::error!(error = ?e, "Error occurred");
-                    if errors.is_empty() {
-                        tracing::info!("Shutting down in response to error");
-                        self.shutdown();
+    /// Fetch the first line of each inventory list file in `specs` and sort
+    /// the list by the keys in those lines
+    async fn sort_csvs_by_first_line(
+        self: &Arc<Self>,
+        specs: Vec<FileSpec>,
+    ) -> Result<Vec<FileSpec>, MultiError> {
+        tracing::info!("Peeking at inventory lists in order to sort by first line ...");
+        let (nursery, nursery_stream) = Nursery::new();
+        let mut receiver = {
+            let specs = Arc::new(Mutex::new(specs));
+            let (output_sender, output_receiver) = tokio::sync::mpsc::channel(CHANNEL_SIZE);
+            for _ in 0..self.jobs.get() {
+                let clnt = self.client.clone();
+                let specs = specs.clone();
+                let sender = output_sender.clone();
+                nursery.spawn(self.until_cancelled_ok(async move {
+                    while let Some(fspec) = {
+                        let mut guard = specs.lock().expect("specs mutex should not be poisoned");
+                        guard.pop()
+                    } {
+                        if let Some(entry) = clnt.peek_inventory_csv(&fspec).await? {
+                            if sender.send((fspec, entry)).await.is_err() {
+                                // Assume we're shutting down
+                                return Ok(());
+                            }
+                        }
                     }
-                    errors.push(e);
+                    Ok(())
+                }));
+            }
+            output_receiver
+        };
+        drop(nursery);
+        let mut firsts2fspecs = BTreeMap::new();
+        while let Some((fspec, entry)) = receiver.recv().await {
+            firsts2fspecs.insert(entry.key().to_owned(), fspec);
+        }
+        self.await_nursery(nursery_stream).await?;
+        Ok(firsts2fspecs.into_values().collect())
+    }
+
+    /// Run the given future to completion, cancelling it if `token` is
+    /// cancelled, in which case `Ok(())` is returned.
+    fn until_cancelled_ok<Fut>(
+        &self,
+        fut: Fut,
+    ) -> impl Future<Output = anyhow::Result<()>> + Send + 'static
+    where
+        Fut: Future<Output = anyhow::Result<()>> + Send + 'static,
+    {
+        // Use an async block instead of making the method async so that the
+        // future won't capture &self and thus will be 'static
+        let token = self.token.clone();
+        async move { token.run_until_cancelled(fut).await.unwrap_or(Ok(())) }
+    }
+
+    /// Wait for all tasks in a nursery to complete.  If any errors occur,
+    /// [`Syncer::shutdown()`] is called, and a [`MultiError`] of all errors
+    /// (including a message about Ctrl-C being received if that happened) is
+    /// returned.
+    async fn await_nursery(
+        &self,
+        mut stream: NurseryStream<anyhow::Result<()>>,
+    ) -> Result<(), MultiError> {
+        let mut errors = Vec::new();
+        while let Some(r) = stream.next().await {
+            if let Err(e) = r {
+                tracing::error!(error = ?e, "Error occurred");
+                if errors.is_empty() {
+                    tracing::info!("Shutting down in response to error");
+                    self.shutdown();
                 }
-                Err(e) if e.is_panic() => std::panic::resume_unwind(e.into_panic()),
-                Err(_) => (),
+                errors.push(e);
             }
         }
-        self.filterlog.finish();
-
         if self.terminated.load(Ordering::Acquire) {
             errors.push(anyhow::anyhow!("Shut down due to Ctrl-C"));
         }
@@ -224,7 +305,7 @@ impl Syncer {
         }
     }
 
-    fn shutdown(self: &Arc<Self>) {
+    fn shutdown(&self) {
         if !self.token.is_cancelled() {
             self.token.cancel();
             self.obj_receiver.close();
@@ -263,7 +344,7 @@ impl Syncer {
         } else {
             self.outdir.clone()
         };
-        let mdmanager = MetadataManager::new(self, &parentdir, filename);
+        let mdmanager = FileMetadataManager::new(self, &parentdir, filename);
 
         if item.is_latest {
             tracing::info!("Object is latest version of key");
@@ -444,134 +525,72 @@ impl Syncer {
             "Process info",
         );
     }
-}
 
-/// Metadata about the latest version of a key
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-struct Metadata {
-    /// The object's version ID
-    version_id: String,
-
-    /// The object's etag
-    etag: String,
-}
-
-impl Metadata {
-    /// Return the filename used for backing up a non-latest object that has
-    /// `self` as its metadata and `basename` as the filename portion of its
-    /// key
-    fn old_filename(&self, basename: &str) -> String {
-        format!("{}.old.{}.{}", basename, self.version_id, self.etag)
-    }
-}
-
-/// Handle for manipulating the metadata for the latest version of a key in a
-/// local JSON database
-struct MetadataManager<'a> {
-    syncer: &'a Syncer,
-
-    /// The local directory in which the downloaded object and the JSON
-    /// database are both located
-    dirpath: &'a Path,
-
-    /// The path to the JSON database
-    database_path: PathBuf,
-
-    /// The filename of the object
-    filename: &'a str,
-}
-
-impl<'a> MetadataManager<'a> {
-    fn new(syncer: &'a Syncer, parentdir: &'a Path, filename: &'a str) -> Self {
-        MetadataManager {
-            syncer,
-            dirpath: parentdir,
-            database_path: parentdir.join(METADATA_FILENAME),
-            filename,
+    #[tracing::instrument(skip_all, fields(dirpath = %dir.path().unwrap_or("<root>")))]
+    async fn cleanup_dir(&self, dir: Directory<Arc<Notify>>) -> anyhow::Result<()> {
+        let mut notifiers = Vec::new();
+        let dir = dir.map(|n| {
+            notifiers.push(n);
+        });
+        for n in notifiers {
+            n.notified().await;
         }
-    }
-
-    /// Acquire a lock on this JSON database
-    async fn lock(&self) -> Guard<'a> {
-        self.syncer.lock_path(self.database_path.clone()).await
-    }
-
-    /// Read & parse the database file.  If the file does not exist, return an
-    /// empty map.
-    fn load(&self) -> anyhow::Result<BTreeMap<String, Metadata>> {
-        let content = match fs_err::read_to_string(&self.database_path) {
-            Ok(content) => content,
-            Err(e) if e.kind() == ErrorKind::NotFound => String::from("{}"),
+        let dirpath = match dir.path() {
+            Some(p) => self.outdir.join(p),
+            None => self.outdir.clone(),
+        };
+        let mut files_to_delete = Vec::new();
+        let mut dirs_to_delete = Vec::new();
+        let mut dbdeletions = Vec::new();
+        let iter = match fs_err::read_dir(&dirpath) {
+            Ok(iter) => iter,
+            Err(e) if e.kind() == ErrorKind::NotFound => return Ok(()),
             Err(e) => return Err(e.into()),
         };
-        serde_json::from_str(&content).with_context(|| {
-            format!(
-                "failed to deserialize contents of {}",
-                self.database_path.display()
-            )
-        })
-    }
-
-    /// Set the content of the database file to the serialized map
-    fn store(&self, data: BTreeMap<String, Metadata>) -> anyhow::Result<()> {
-        let fp = tempfile::Builder::new()
-            .prefix(".s3invsync.versions.")
-            .tempfile_in(self.dirpath)
-            .with_context(|| {
-                format!(
-                    "failed to create temporary database file for updating {}",
-                    self.database_path.display()
-                )
-            })?;
-        serde_json::to_writer_pretty(fp.as_file(), &data).with_context(|| {
-            format!(
-                "failed to serialize metadata to {}",
-                self.database_path.display()
-            )
-        })?;
-        fp.persist(&self.database_path).with_context(|| {
-            format!(
-                "failed to persist temporary database file to {}",
-                self.database_path.display()
-            )
-        })?;
-        Ok(())
-    }
-
-    /// Retrieve the metadata for the key from the database
-    async fn get(&self) -> anyhow::Result<Metadata> {
-        tracing::trace!(file = self.filename, database = %self.database_path.display(), "Fetching object metadata for file from database");
-        let mut data = {
-            let _guard = self.lock().await;
-            self.load()?
-        };
-        let Some(md) = data.remove(self.filename) else {
-            anyhow::bail!(
-                "No entry for {:?} in {}",
-                self.filename,
-                self.database_path.display()
-            );
-        };
-        Ok(md)
-    }
-
-    /// Set the metadata for the key in the database to `md`
-    async fn set(&self, md: Metadata) -> anyhow::Result<()> {
-        tracing::trace!(file = self.filename, database = %self.database_path.display(), "Setting object metadata for file in database");
-        let _guard = self.lock().await;
-        let mut data = self.load()?;
-        data.insert(self.filename.to_owned(), md);
-        self.store(data)?;
-        Ok(())
-    }
-
-    /// Remove the metadata for the key from the database
-    async fn delete(&self) -> anyhow::Result<()> {
-        tracing::trace!(file = self.filename, database = %self.database_path.display(), "Deleting object metadata for file from database");
-        let _guard = self.lock().await;
-        let mut data = self.load()?;
-        if data.remove(self.filename).is_some() {
-            self.store(data)?;
+        for entry in iter {
+            let entry = entry?;
+            let is_dir = entry.file_type()?.is_dir();
+            let to_delete = match entry.file_name().to_str() {
+                Some(name) => {
+                    if is_dir {
+                        !dir.contains_dir(name)
+                    } else {
+                        let b = !dir.contains_file(name) && name != METADATA_FILENAME;
+                        if b && !is_special_component(name) {
+                            dbdeletions.push(name.to_owned());
+                        }
+                        b
+                    }
+                }
+                None => true,
+            };
+            if to_delete {
+                if is_dir {
+                    dirs_to_delete.push(entry.path());
+                } else {
+                    files_to_delete.push(entry.path());
+                }
+            }
+        }
+        for p in files_to_delete {
+            tracing::debug!(path = %p.display(), "File does not belong in backup; deleting");
+            if let Err(e) = fs_err::remove_file(&p) {
+                tracing::warn!(error = %e, path = %p.display(), "Failed to delete file");
+            }
+        }
+        for p in dirs_to_delete {
+            tracing::debug!(path = %p.display(), "Directory does not belong in backup; deleting");
+            if let Err(e) = fs_err::tokio::remove_dir_all(&p).await {
+                tracing::warn!(error = %e, path = %p.display(), "Failed to delete directory");
+            }
+        }
+        if !dbdeletions.is_empty() {
+            let manager = MetadataManager::new(&dirpath);
+            let mut data = manager.load()?;
+            for name in dbdeletions {
+                data.remove(&name);
+            }
+            manager.store(data)?;
         }
         Ok(())
     }
