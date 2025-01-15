@@ -40,9 +40,10 @@ struct Arguments {
     #[arg(short, long)]
     date: Option<DateMaybeHM>,
 
-    /// Set the maximum number of concurrent download jobs
-    #[arg(short = 'J', long, default_value = "20")]
-    jobs: NonZeroUsize,
+    /// Set the maximum number of concurrent download jobs.  Defaults to the
+    /// number of available CPU cores, or 20, whichever is lower.
+    #[arg(short = 'J', long)]
+    jobs: Option<NonZeroUsize>,
 
     /// List available inventory manifest dates instead of backing anything up
     #[arg(long)]
@@ -80,6 +81,18 @@ struct Arguments {
     outdir: Option<PathBuf>,
 }
 
+impl Arguments {
+    fn jobs(&self) -> anyhow::Result<NonZeroUsize> {
+        if let Some(j) = self.jobs {
+            Ok(j)
+        } else {
+            let cores = std::thread::available_parallelism()
+                .context("failed to determine number of available CPU cores")?;
+            Ok(cores.min(NonZeroUsize::new(20).expect("20 != 0")))
+        }
+    }
+}
+
 // See
 // <https://docs.rs/tracing-subscriber/latest/tracing_subscriber/fmt/time/struct.OffsetTime.html#method.local_rfc_3339>
 // for an explanation of the main + #[tokio::main]run thing
@@ -106,6 +119,7 @@ fn main() -> anyhow::Result<()> {
 
 #[tokio::main]
 async fn run(args: Arguments) -> anyhow::Result<()> {
+    let jobs = args.jobs()?;
     let start_time = std::time::Instant::now();
     let bucket = args.inventory_base.bucket();
     tracing::info!(%bucket, "Determining region for S3 bucket ...");
@@ -129,7 +143,7 @@ async fn run(args: Arguments) -> anyhow::Result<()> {
             outdir,
             manifest_date,
             start_time,
-            args.jobs,
+            jobs,
             args.path_filter,
             args.compress_filter_msgs,
         );

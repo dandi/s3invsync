@@ -12,6 +12,8 @@ In Development
 - Increased MSRV to 1.81
 - The temporary file used to download a manifest is now deleted immediately
   after parsing the manifest
+- The default `--jobs` value now equals the number of available CPU cores or
+  20, whichever is lower
 
 v0.1.0-alpha.2 (2025-01-06)
 ---------------------------
