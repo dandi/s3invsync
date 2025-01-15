@@ -113,7 +113,8 @@ Options
   (to specify a specific inventory).
 
 - `-J <INT>`, `--jobs <INT>` — Specify the maximum number of concurrent
-  download jobs [default: 20]
+  download jobs.  Defaults to the number of available CPU cores, or 20,
+  whichever is lower.
 
 - `--list-dates` — List available inventory manifest dates instead of
   backing anything up
