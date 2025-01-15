@@ -11,6 +11,8 @@ authors = [
 repository = "https://github.com/dandi/s3invsync"
 documentation = "https://github.com/dandi/s3invsync"
 license = "MIT"
+keywords = ["backup", "aws-s3"]
+categories = ["command-line-utilities", "filesystem"]
 exclude = ["/.*"]
 publish = false
 
