@@ -508,6 +508,12 @@ pub(crate) struct GetError {
     source: SdkError<GetObjectError, HttpResponse>,
 }
 
+impl GetError {
+    pub(crate) fn is_404(&self) -> bool {
+        matches!(self.source, SdkError::ServiceError(ref e) if e.raw().status().as_u16() == 404)
+    }
+}
+
 /// Determine the region that the given S3 bucket belongs to
 // cf. <https://github.com/awslabs/aws-sdk-rust/issues/1052>
 pub(crate) async fn get_bucket_region(bucket: &str) -> Result<String, GetBucketRegionError> {
