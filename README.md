@@ -12,9 +12,8 @@ making use of the bucket's [Amazon S3 Inventory][inv] files.
 
 [inv]: https://docs.aws.amazon.com/AmazonS3/latest/userguide/storage-inventory.html
 
-Currently, only versioned buckets and S3 Inventories with CSV output files are
-supported, and the CSVs are required to list at least the `Bucket`, `Key`,
-`VersionId`, and `ETag` fields.
+Currently, only S3 Inventories with CSV output files are supported, and the
+CSVs are required to list at least the `Bucket`, `Key`, and `ETag` fields.
 
 **Warning:** This is an in-development program.  They may be bugs, and some
 planned features have not been implemented yet.
@@ -70,8 +69,8 @@ Usage
     s3invsync [<options>] <inventory-base> <outdir>
 
 `s3invsync` downloads the contents of an S3 bucket, including old versions of
-objects, to the directory `<outdir>` using S3 Inventory files located at
-`<inventory-base>`.
+objects if the bucket is versioned, to the directory `<outdir>` using S3
+Inventory files located at `<inventory-base>`.
 
 `<inventory-base>` must be of the form `s3://{bucket}/{prefix}/`, where
 `{bucket}` is the destination bucket on which the inventory files are stored

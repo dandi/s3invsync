@@ -44,10 +44,9 @@ impl InventoryField {
     // IMPORTANT: If a field is ever removed from this list, the corresponding
     // `if Some(field) = field else { unreachable!() };` statement in
     // `FileSchema::parse_csv_fields()` must be removed as well.
-    const REQUIRED: [InventoryField; 4] = [
+    const REQUIRED: [InventoryField; 3] = [
         InventoryField::Bucket,
         InventoryField::Key,
-        InventoryField::VersionId,
         InventoryField::ETag,
     ];
 }
@@ -104,10 +103,9 @@ impl FileSchema {
                 }
                 InventoryField::Key => (),
                 InventoryField::VersionId => {
-                    if value.is_empty() {
-                        return Err(ParseEntryError::EmptyVersionId(key));
+                    if !value.is_empty() {
+                        version_id = Some(value);
                     }
-                    version_id = Some(value);
                 }
                 InventoryField::IsLatest => {
                     let Ok(b) = value.parse::<bool>() else {
@@ -189,9 +187,6 @@ impl FileSchema {
         }
         let Some(bucket) = bucket else {
             unreachable!("required field 'Bucket' should always be defined");
-        };
-        let Some(version_id) = version_id else {
-            unreachable!("required field 'VersionId' should always be defined");
         };
         let is_latest = is_latest.unwrap_or(true);
         if key.ends_with('/')
@@ -317,10 +312,6 @@ pub(crate) enum ParseEntryError {
     /// The input has an empty "bucket" field
     #[error("inventory item {0:?} has empty bucket field")]
     EmptyBucket(String),
-
-    /// The input has an empty "version ID" field
-    #[error("inventory item {0:?} has empty version ID field")]
-    EmptyVersionId(String),
 
     /// Failed to parse an individual field
     #[error("could not parse inventory list entry for key {key:?}, field {field}, field value {value:?}; expected {expected}")]

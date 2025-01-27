@@ -8,7 +8,7 @@ use std::io::{ErrorKind, Write};
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub(super) struct Metadata {
     /// The object's version ID
-    pub(super) version_id: String,
+    pub(super) version_id: Option<String>,
 
     /// The object's etag
     pub(super) etag: String,
@@ -19,7 +19,7 @@ impl Metadata {
     /// `self` as its metadata and `basename` as the filename portion of its
     /// key
     pub(super) fn old_filename(&self, basename: &str) -> String {
-        make_old_filename(basename, &self.version_id, &self.etag)
+        make_old_filename(basename, self.version_id.as_deref(), &self.etag)
     }
 }
 
