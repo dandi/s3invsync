@@ -3,11 +3,12 @@ mod treetracker;
 use self::metadata::*;
 use self::treetracker::*;
 use crate::consts::METADATA_FILENAME;
-use crate::inventory::{InventoryEntry, InventoryItem, ItemDetails};
+use crate::errorset::ErrorSet;
+use crate::inventory::{CsvReaderError, InventoryEntry, InventoryItem, ItemDetails};
 use crate::keypath::is_special_component;
 use crate::manifest::{CsvManifest, FileSpec};
 use crate::nursery::{Nursery, NurseryStream};
-use crate::s3::S3Client;
+use crate::s3::{DownloadError, S3Client};
 use crate::timestamps::DateHM;
 use crate::util::*;
 use anyhow::Context;
@@ -73,6 +74,10 @@ pub(crate) struct Syncer {
     /// Object for emitting log messages about objects skipped due to
     /// `--path-filter`
     filterlog: FilterLogger,
+
+    /// Which errors should be warned about and discarded rather than causing a
+    /// shutdown
+    ok_errors: ErrorSet,
 }
 
 impl Syncer {
@@ -85,6 +90,7 @@ impl Syncer {
         jobs: NonZeroUsize,
         path_filter: Option<regex::Regex>,
         compress_filter_msgs: Option<NonZeroUsize>,
+        ok_errors: ErrorSet,
     ) -> Arc<Syncer> {
         let (obj_sender, obj_receiver) = async_channel::bounded(CHANNEL_SIZE);
         Arc::new(Syncer {
@@ -100,11 +106,12 @@ impl Syncer {
             obj_receiver,
             terminated: AtomicBool::new(false),
             filterlog: FilterLogger::new(compress_filter_msgs),
+            ok_errors,
         })
     }
 
-    pub(crate) async fn run(self: &Arc<Self>, manifest: CsvManifest) -> Result<(), MultiError> {
-        self.spawwn_cltrc_listener();
+    pub(crate) async fn run(self: Arc<Self>, manifest: CsvManifest) -> Result<(), MultiError> {
+        self.spawn_cltrc_listener();
         let fspecs = self.sort_csvs_by_first_line(manifest.files).await?;
         tracing::trace!(path = %self.outdir.display(), "Creating root output directory");
         fs_err::create_dir_all(&self.outdir).map_err(|e| MultiError(vec![e.into()]))?;
@@ -117,7 +124,7 @@ impl Syncer {
         r
     }
 
-    fn spawwn_cltrc_listener(self: &Arc<Self>) {
+    fn spawn_cltrc_listener(self: &Arc<Self>) {
         tokio::spawn({
             let this = self.clone();
             async move {
@@ -153,11 +160,11 @@ impl Syncer {
                 for spec in fspecs {
                     let entries = this.client.download_inventory_csv(spec).await?;
                     for entry in entries {
-                        match entry.context("error reading from inventory list file")? {
-                            InventoryEntry::Directory(d) => {
+                        match entry {
+                            Ok(InventoryEntry::Directory(d)) => {
                                 tracing::debug!(url = %d.url(), "Ignoring directory entry in inventory list");
                             }
-                            InventoryEntry::Item(item) => {
+                            Ok(InventoryEntry::Item(item)) => {
                                 let notify = if !item.is_deleted() {
                                     let notify = Arc::new(Notify::new());
                                     for dir in tracker.add(&item.key, notify.clone(), item.old_filename())? {
@@ -177,6 +184,11 @@ impl Syncer {
                                     return Ok(());
                                 }
                             }
+                            Err(e) if matches!(e.source, CsvReaderError::Parse(_)) && this.ok_errors.invalid_entry => {
+                                let e = anyhow::Error::from(e);
+                                tracing::warn!(error = ?e, "invalid entry in inventory list file; ignoring");
+                            }
+                            Err(e) => return Err(e).context("error reading from inventory list file"),
                         }
                     }
                 }
@@ -363,7 +375,10 @@ impl Syncer {
                         &latest_path,
                         &parentdir.join(current_md.old_filename(filename)),
                     )?;
-                    if self.download_item(&item, &parentdir, latest_path).await? {
+                    if self
+                        .download_item(&item, &parentdir, latest_path, false)
+                        .await?
+                    {
                         mdmanager.set(md).await.with_context(|| {
                             format!("failed to set local metadata for {}", item.url())
                         })?;
@@ -379,7 +394,10 @@ impl Syncer {
                     })?;
                 } else {
                     tracing::info!(path = %latest_path.display(), "Backup path does not exist; will download");
-                    if self.download_item(&item, &parentdir, latest_path).await? {
+                    if self
+                        .download_item(&item, &parentdir, latest_path, false)
+                        .await?
+                    {
                         mdmanager.set(md).await.with_context(|| {
                             format!("failed to set local metadata for {}", item.url())
                         })?;
@@ -417,7 +435,7 @@ impl Syncer {
                     // doesn't exist, so no other tasks should be working on
                     // it.
                     drop(guard);
-                    self.download_item(&item, &parentdir, oldpath).await?;
+                    self.download_item(&item, &parentdir, oldpath, true).await?;
                 }
             }
         }
@@ -436,6 +454,7 @@ impl Syncer {
         item: &InventoryItem,
         parentdir: &Path,
         path: PathBuf,
+        is_old: bool,
     ) -> anyhow::Result<bool> {
         tracing::trace!("Opening temporary output file");
         let outfile = tempfile::Builder::new()
@@ -466,6 +485,18 @@ impl Syncer {
                         .with_context(|| format!("failed to set mtime on {}", path.display()))?;
                 }
                 Ok(true)
+            }
+            Some(Err(e))
+                if matches!(e, DownloadError::Get(ref ge) if ge.is_404())
+                    && self.ok_errors.missing_old_version
+                    && is_old =>
+            {
+                let e = anyhow::Error::from(e);
+                tracing::warn!(error = ?e, "object not found; ignoring");
+                if let Err(e2) = self.cleanup_download_path(item, outfile, &path) {
+                    tracing::warn!(error = ?e2, "Failed to clean up download path");
+                }
+                Ok(false)
             }
             Some(Err(e)) => {
                 let e = anyhow::Error::from(e);

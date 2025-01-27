@@ -55,8 +55,8 @@ impl Drop for InventoryList {
 #[derive(Debug, Error)]
 #[error("failed to read entry from inventory list at {url}")]
 pub(crate) struct InventoryListError {
-    url: S3Location,
-    source: CsvReaderError,
+    pub(crate) url: S3Location,
+    pub(crate) source: CsvReaderError,
 }
 
 /// A struct for decoding [`InventoryEntry`]s from a reader containing CSV data

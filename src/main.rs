@@ -1,4 +1,5 @@
 mod consts;
+mod errorset;
 mod inventory;
 mod keypath;
 mod manifest;
@@ -7,6 +8,7 @@ mod s3;
 mod syncer;
 mod timestamps;
 mod util;
+use crate::errorset::ErrorSet;
 use crate::s3::{get_bucket_region, S3Client, S3Location};
 use crate::syncer::Syncer;
 use crate::timestamps::DateMaybeHM;
@@ -57,6 +59,25 @@ struct Arguments {
         value_name = "ERROR|WARN|INFO|DEBUG|TRACE"
     )]
     log_level: Level,
+
+    /// Treat the given error types as non-fatal.
+    ///
+    /// If one of the specified types of errors occurs, a warning is emitted,
+    /// and the error is otherwise ignored.
+    ///
+    /// This option takes a comma-separated list of one or more of the
+    /// following error types:
+    ///
+    /// - invalid-entry — an entry in an inventory list file is invalid
+    ///
+    /// - missing-old-version — a 404 occurred while trying to download a
+    ///   non-latest version of a key
+    ///
+    /// - all — same as listing all of the above error types
+    ///
+    /// By default, all of the above error types are fatal.
+    #[arg(long, value_name = "LIST")]
+    ok_errors: Option<ErrorSet>,
 
     /// Only download objects whose keys match the given regular expression
     #[arg(long, value_name = "REGEX")]
@@ -146,6 +167,7 @@ async fn run(args: Arguments) -> anyhow::Result<()> {
             jobs,
             args.path_filter,
             args.compress_filter_msgs,
+            args.ok_errors.unwrap_or_default(),
         );
         tracing::info!("Starting backup ...");
         syncer.run(manifest).await?;
