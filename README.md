@@ -143,4 +143,6 @@ Options
   [regular expression](https://docs.rs/regex/latest/regex/#syntax)
 
 - `--trace-progress` — Emit per-object download progress at the TRACE level.
-  This is off by default because it can make for some very noisy logs.
+  (Note that you still need to specify `--log-level TRACE` separately in order
+  for the download progress logs to be visible.)  This is off by default because
+  it can make for some very noisy logs.
