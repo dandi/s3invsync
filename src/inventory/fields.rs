@@ -103,9 +103,25 @@ impl FileSchema {
                 }
                 InventoryField::Key => (),
                 InventoryField::VersionId => {
-                    if !value.is_empty() {
+                    if value.is_empty() {
+                        // An empty version ID in the inventory means the
+                        // object was created when the bucket was unversioned,
+                        // in which case the effective version ID to use in
+                        // GetObject requests is "null".
+                        version_id = Some(String::from("null"));
+                    } else {
                         version_id = Some(value);
                     }
+                    // Leave `version_id` as `None` if there's no VersionId
+                    // field, as the field's absence means that either (a) the
+                    // bucket is versioned but the inventory only lists latest
+                    // versions, in which case we just want to download the
+                    // latest version of each key and don't know the version
+                    // IDs, and so no version ID should be supplied in
+                    // GetObject requests, or (b) the bucket is unversioned (At
+                    // least, I assume the inventory for an unversioned bucket
+                    // lacks a VersionId field), in which case the version ID
+                    // should be absent from GetObject requests.
                 }
                 InventoryField::IsLatest => {
                     let Ok(b) = value.parse::<bool>() else {
