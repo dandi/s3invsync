@@ -122,8 +122,11 @@ pub(crate) fn force_create_dir_all<I: IntoIterator<Item: AsRef<Path>>>(
 /// Construct the base filename for backing up an object that is not the latest
 /// version of its key, where `basename` is the filename portion of the key,
 /// `version_id` is the object's version ID, and `etag` is its etag.
-pub(crate) fn make_old_filename(basename: &str, version_id: &str, etag: &str) -> String {
-    format!("{basename}.old.{version_id}.{etag}")
+pub(crate) fn make_old_filename(basename: &str, version_id: Option<&str>, etag: &str) -> String {
+    format!(
+        "{basename}.old.{v}.{etag}",
+        v = version_id.unwrap_or("null")
+    )
 }
 
 #[cfg(test)]

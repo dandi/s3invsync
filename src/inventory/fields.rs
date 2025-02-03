@@ -44,10 +44,9 @@ impl InventoryField {
     // IMPORTANT: If a field is ever removed from this list, the corresponding
     // `if Some(field) = field else { unreachable!() };` statement in
     // `FileSchema::parse_csv_fields()` must be removed as well.
-    const REQUIRED: [InventoryField; 4] = [
+    const REQUIRED: [InventoryField; 3] = [
         InventoryField::Bucket,
         InventoryField::Key,
-        InventoryField::VersionId,
         InventoryField::ETag,
     ];
 }
@@ -105,9 +104,24 @@ impl FileSchema {
                 InventoryField::Key => (),
                 InventoryField::VersionId => {
                     if value.is_empty() {
-                        return Err(ParseEntryError::EmptyVersionId(key));
+                        // An empty version ID in the inventory means the
+                        // object was created when the bucket was unversioned,
+                        // in which case the effective version ID to use in
+                        // GetObject requests is "null".
+                        version_id = Some(String::from("null"));
+                    } else {
+                        version_id = Some(value);
                     }
-                    version_id = Some(value);
+                    // Leave `version_id` as `None` if there's no VersionId
+                    // field, as the field's absence means that either (a) the
+                    // bucket is versioned but the inventory only lists latest
+                    // versions, in which case we just want to download the
+                    // latest version of each key and don't know the version
+                    // IDs, and so no version ID should be supplied in
+                    // GetObject requests, or (b) the bucket is unversioned (At
+                    // least, I assume the inventory for an unversioned bucket
+                    // lacks a VersionId field), in which case the version ID
+                    // should be absent from GetObject requests.
                 }
                 InventoryField::IsLatest => {
                     let Ok(b) = value.parse::<bool>() else {
@@ -189,9 +203,6 @@ impl FileSchema {
         }
         let Some(bucket) = bucket else {
             unreachable!("required field 'Bucket' should always be defined");
-        };
-        let Some(version_id) = version_id else {
-            unreachable!("required field 'VersionId' should always be defined");
         };
         let is_latest = is_latest.unwrap_or(true);
         if key.ends_with('/')
@@ -317,10 +328,6 @@ pub(crate) enum ParseEntryError {
     /// The input has an empty "bucket" field
     #[error("inventory item {0:?} has empty bucket field")]
     EmptyBucket(String),
-
-    /// The input has an empty "version ID" field
-    #[error("inventory item {0:?} has empty version ID field")]
-    EmptyVersionId(String),
 
     /// Failed to parse an individual field
     #[error("could not parse inventory list entry for key {key:?}, field {field}, field value {value:?}; expected {expected}")]
