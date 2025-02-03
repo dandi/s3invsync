@@ -2,7 +2,7 @@ use super::*;
 use crate::consts::{METADATA_FILENAME, RESERVED_PREFIX};
 use crate::util::make_old_filename;
 use serde::{Deserialize, Serialize};
-use std::io::ErrorKind;
+use std::io::{ErrorKind, Write};
 
 /// Metadata about the latest version of a key
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -140,6 +140,12 @@ impl<'a> MetadataManager<'a> {
         serde_json::to_writer_pretty(fp.as_file(), &data).with_context(|| {
             format!(
                 "failed to serialize metadata to {}",
+                self.database_path.display()
+            )
+        })?;
+        fp.as_file().write_all(b"\n").with_context(|| {
+            format!(
+                "failed to write terminating newline to {}",
                 self.database_path.display()
             )
         })?;
