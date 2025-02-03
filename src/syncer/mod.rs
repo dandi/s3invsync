@@ -229,9 +229,14 @@ impl Syncer {
                         return Ok(());
                     }
                     let r = Box::pin(this.process_item(item)).await;
-                    if let Some(n) = notify {
-                        n.notify_one();
+                    if r.is_ok() {
+                        if let Some(n) = notify {
+                            n.notify_one();
+                        }
                     }
+                    // If r.is_err(), the cleanup_dir() task at the other end
+                    // of the Notify will be cancelled due to everything
+                    // shutting down.
                     r?;
                 }
                 Ok(())
