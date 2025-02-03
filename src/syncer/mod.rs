@@ -2,7 +2,7 @@ mod metadata;
 mod treetracker;
 use self::metadata::*;
 use self::treetracker::*;
-use crate::consts::METADATA_FILENAME;
+use crate::consts::RESERVED_PREFIX;
 use crate::errorset::ErrorSet;
 use crate::inventory::{CsvReaderError, InventoryEntry, InventoryItem, ItemDetails};
 use crate::keypath::is_special_component;
@@ -458,7 +458,7 @@ impl Syncer {
     ) -> anyhow::Result<bool> {
         tracing::trace!("Opening temporary output file");
         let outfile = tempfile::Builder::new()
-            .prefix(".s3invsync.download.")
+            .prefix(&format!("{RESERVED_PREFIX}.download."))
             .tempfile_in(parentdir)
             .with_context(|| {
                 format!("failed to create temporary output file for {}", item.url())
@@ -586,7 +586,7 @@ impl Syncer {
                     if is_dir {
                         !dir.contains_dir(name)
                     } else {
-                        let b = !dir.contains_file(name) && name != METADATA_FILENAME;
+                        let b = !dir.contains_file(name) && !name.starts_with(RESERVED_PREFIX);
                         if b && !is_special_component(name) {
                             dbdeletions.push(name.to_owned());
                         }

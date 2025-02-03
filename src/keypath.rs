@@ -1,4 +1,4 @@
-use crate::consts::METADATA_FILENAME;
+use crate::consts::RESERVED_PREFIX;
 use thiserror::Error;
 
 /// A nonempty, forward-slash-separated path that does not contain any of the
@@ -8,7 +8,7 @@ use thiserror::Error;
 /// - a leading or trailing forward slash
 /// - two or more consecutive forward slashes
 /// - NUL
-/// - a component that equals [`METADATA_FILENAME`] or that looks like
+/// - a component that starts with [`RESERVED_PREFIX`] or that looks like
 ///   `{filename}.old.{version_id}.{etag}` (specifically, of the form
 ///   `{nonempty}.old.{nonempty}.{nonempty}`)
 #[derive(Clone, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -116,7 +116,7 @@ pub(crate) enum ParseKeyPathError {
     Nul,
     #[error("path is not normalized")]
     NotNormalized,
-    #[error("path contains component with special meaning")]
+    #[error("path contains component name reserved by s3invsync")]
     Special,
 }
 
@@ -145,11 +145,11 @@ fn validate(s: &str) -> Result<(), ParseKeyPathError> {
     }
 }
 
-// Test for components that equal `METADATA_FILENAME` or look like
+// Test for components that equal start with `RESERVED_PREFIX` or look like
 // `{filename}.old.{version_id}.{etag}` (specifically, that are of the form
 // `{nonempty}.old.{nonempty}.{nonempty}`)
 pub(crate) fn is_special_component(component: &str) -> bool {
-    if component == METADATA_FILENAME {
+    if component.starts_with(RESERVED_PREFIX) {
         return true;
     }
     if let Some(i) = component.find(".old.").filter(|&i| i > 0) {
@@ -226,6 +226,9 @@ mod tests {
     #[case("foo.old..baz", false)]
     #[case("foo.old..", false)]
     #[case(".s3invsync.versions.json", true)]
+    #[case(".s3invsync.download.1234abcd", true)]
+    #[case(".s3invsync.", true)]
+    #[case(".s3invsync", true)]
     fn test_is_special_component(#[case] s: &str, #[case] r: bool) {
         assert_eq!(is_special_component(s), r);
     }
