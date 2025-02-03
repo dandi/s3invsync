@@ -1,6 +1,7 @@
 use crate::consts::RESERVED_PREFIX;
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
+use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
 use time::OffsetDateTime;
 
@@ -19,7 +20,7 @@ impl StateFileManager {
     fn load(&self) -> anyhow::Result<State> {
         let content = match fs_err::read_to_string(&self.path) {
             Ok(content) => content,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(State::default()),
+            Err(e) if e.kind() == ErrorKind::NotFound => return Ok(State::default()),
             Err(e) => return Err(e.into()),
         };
         serde_json::from_str(&content)
@@ -42,6 +43,12 @@ impl StateFileManager {
             })?;
         serde_json::to_writer_pretty(fp.as_file(), &state)
             .with_context(|| format!("failed to serialize state to {}", self.path.display()))?;
+        fp.as_file().write_all(b"\n").with_context(|| {
+            format!(
+                "failed to write terminating newline to {}",
+                self.path.display()
+            )
+        })?;
         fp.persist(&self.path).with_context(|| {
             format!(
                 "failed to persist temporary state file to {}",
