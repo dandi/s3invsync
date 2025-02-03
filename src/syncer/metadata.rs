@@ -1,4 +1,5 @@
 use super::*;
+use crate::consts::{METADATA_FILENAME, RESERVED_PREFIX};
 use crate::util::make_old_filename;
 use serde::{Deserialize, Serialize};
 use std::io::ErrorKind;
@@ -128,7 +129,7 @@ impl<'a> MetadataManager<'a> {
     /// Set the content of the database file to the serialized map
     pub(super) fn store(&self, data: BTreeMap<String, Metadata>) -> anyhow::Result<()> {
         let fp = tempfile::Builder::new()
-            .prefix(".s3invsync.versions.")
+            .prefix(&format!("{RESERVED_PREFIX}.versions."))
             .tempfile_in(self.dirpath)
             .with_context(|| {
                 format!(

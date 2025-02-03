@@ -13,6 +13,7 @@ In Development
 - The default `--jobs` value now equals the number of available CPU cores or
   20, whichever is lower
 - Add `--ok-errors` option
+- Store start & successful end times of program runs in `.s3invsync.state.json`
 
 v0.1.0-alpha.2 (2025-01-06)
 ---------------------------

@@ -1,8 +1,10 @@
 mod metadata;
+mod statefile;
 mod treetracker;
 use self::metadata::*;
+use self::statefile::StateFileManager;
 use self::treetracker::*;
-use crate::consts::METADATA_FILENAME;
+use crate::consts::RESERVED_PREFIX;
 use crate::errorset::ErrorSet;
 use crate::inventory::{CsvReaderError, InventoryEntry, InventoryItem, ItemDetails};
 use crate::keypath::is_special_component;
@@ -114,13 +116,18 @@ impl Syncer {
         self.spawn_cltrc_listener();
         let fspecs = self.sort_csvs_by_first_line(manifest.files).await?;
         tracing::trace!(path = %self.outdir.display(), "Creating root output directory");
-        fs_err::create_dir_all(&self.outdir).map_err(|e| MultiError(vec![e.into()]))?;
+        fs_err::create_dir_all(&self.outdir).map_err(anyhow::Error::from)?;
+        let sfm = StateFileManager::new(&self.outdir);
+        sfm.register_start()?;
         let (nursery, nursery_stream) = Nursery::new();
         self.spawn_inventory_task(&nursery, fspecs);
         self.spawn_object_tasks(&nursery);
         drop(nursery);
         let r = self.await_nursery(nursery_stream).await;
         self.filterlog.finish();
+        if r.is_ok() {
+            sfm.register_end()?;
+        }
         r
     }
 
@@ -458,7 +465,7 @@ impl Syncer {
     ) -> anyhow::Result<bool> {
         tracing::trace!("Opening temporary output file");
         let outfile = tempfile::Builder::new()
-            .prefix(".s3invsync.download.")
+            .prefix(&format!("{RESERVED_PREFIX}.download."))
             .tempfile_in(parentdir)
             .with_context(|| {
                 format!("failed to create temporary output file for {}", item.url())
@@ -586,7 +593,7 @@ impl Syncer {
                     if is_dir {
                         !dir.contains_dir(name)
                     } else {
-                        let b = !dir.contains_file(name) && name != METADATA_FILENAME;
+                        let b = !dir.contains_file(name) && !name.starts_with(RESERVED_PREFIX);
                         if b && !is_special_component(name) {
                             dbdeletions.push(name.to_owned());
                         }

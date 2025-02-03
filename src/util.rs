@@ -25,6 +25,12 @@ impl fmt::Display for MultiError {
 
 impl std::error::Error for MultiError {}
 
+impl From<anyhow::Error> for MultiError {
+    fn from(e: anyhow::Error) -> MultiError {
+        MultiError(vec![e])
+    }
+}
+
 /// If `r` is an `Err` with the given `ErrorKind`, convert it to `Ok(())`.
 fn suppress_error_kind(r: std::io::Result<()>, kind: ErrorKind) -> std::io::Result<()> {
     if matches!(r, Err(ref e) if e.kind() == kind) {
