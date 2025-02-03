@@ -3,8 +3,6 @@ In Development
 - Add `--compress-filter-msgs` option
 - Support all documented S3 Inventory fields in inventory lists
 - Add `--list-dates` option
-- The `<outdir>` command-line argument is now optional and defaults to the
-  current directory
 - The `--inventory-jobs` and `--object-jobs` options have been eliminated in
   favor of a new `--jobs` option
 - Files & directories in the backup tree that are not listed in the inventory
