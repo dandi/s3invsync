@@ -21,7 +21,7 @@ anyhow = "1.0.95"
 async-channel = "2.3.1"
 aws-config = { version = "1.5.15", features = ["behavior-version-latest", "rustls"] }
 aws-credential-types = "1.2.1"
-aws-sdk-s3 = "1.71.0"
+aws-sdk-s3 = "1.72.0"
 aws-smithy-async = "1.2.4"
 aws-smithy-runtime-api = "1.7.3"
 clap = { version = "4.5.27", default-features = false, features = ["derive", "error-context", "help", "std", "suggestions", "usage", "wrap_help"] }
@@ -38,9 +38,9 @@ percent-encoding = "2.3.1"
 pin-project-lite = "0.2.16"
 regex = "1.11.1"
 serde = { version = "1.0.217", features = ["derive"] }
-serde_json = "1.0.137"
+serde_json = "1.0.138"
 strum = { version = "0.26.3", features = ["derive"] }
-tempfile = "3.15.0"
+tempfile = "3.16.0"
 thiserror = "2.0.11"
 time = { version = "0.3.37", features = ["macros", "parsing"] }
 tokio = { version = "1.43.0", features = ["macros", "rt-multi-thread", "signal", "sync"] }
