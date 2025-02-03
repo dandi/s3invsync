@@ -112,6 +112,16 @@ impl Arguments {
             Ok(cores.min(NonZeroUsize::new(20).expect("20 != 0")))
         }
     }
+
+    async fn get_client(&self) -> anyhow::Result<S3Client> {
+        let bucket = self.inventory_base.bucket();
+        tracing::info!(%bucket, "Determining region for S3 bucket ...");
+        let region = get_bucket_region(self.inventory_base.bucket()).await?;
+        tracing::info!(%bucket, %region, "Found S3 bucket region");
+        S3Client::new(region, self.inventory_base.clone(), self.trace_progress)
+            .await
+            .map_err(Into::into)
+    }
 }
 
 // See
@@ -140,23 +150,19 @@ fn main() -> anyhow::Result<()> {
 
 #[tokio::main]
 async fn run(args: Arguments) -> anyhow::Result<()> {
-    let jobs = args.jobs()?;
-    let start_time = std::time::Instant::now();
-    let bucket = args.inventory_base.bucket();
-    tracing::info!(%bucket, "Determining region for S3 bucket ...");
-    let region = get_bucket_region(args.inventory_base.bucket()).await?;
-    tracing::info!(%bucket, %region, "Found S3 bucket region");
-    let client = S3Client::new(region, args.inventory_base, args.trace_progress).await?;
     if args.list_dates {
+        let client = args.get_client().await?;
         let mut stream = client.list_all_manifest_timestamps();
         while let Some(date) = stream.try_next().await? {
             println!("{date}");
         }
     } else {
-        let outdir = match args.outdir {
-            Some(p) => p,
-            None => std::env::current_dir().context("failed to determine current directory")?,
+        let Some(outdir) = args.outdir.clone() else {
+            anyhow::bail!("missing required OUTDIR argument");
         };
+        let jobs = args.jobs()?;
+        let start_time = std::time::Instant::now();
+        let client = args.get_client().await?;
         tracing::info!("Fetching manifest ...");
         let (manifest, manifest_date) = client.get_manifest_for_date(args.date).await?;
         let syncer = Syncer::new(
