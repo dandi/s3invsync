@@ -12,7 +12,7 @@ pub(super) struct StateFileManager {
 impl StateFileManager {
     pub(super) fn new(outdir: &Path) -> Self {
         StateFileManager {
-            path: outdir.join("{RESERVED_PREFIX}.state.json"),
+            path: outdir.join(format!("{RESERVED_PREFIX}.state.json")),
         }
     }
 
