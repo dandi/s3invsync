@@ -18,6 +18,10 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.sha }}
   cancel-in-progress: true
 
+defaults:
+  run:
+    shell: bash
+
 jobs:
   build:
     name: build (${{ matrix.target }})
@@ -80,22 +84,36 @@ jobs:
         if: matrix.use-cross
         run: cross build --release --target ${{ matrix.target }} --verbose
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: s3invsync-${{ matrix.os-name }}-${{ matrix.architecture }}
-          path: target/${{ matrix.target }}/release/s3invsync${{ matrix.suffix }}
-
-      - name: Upload release asset
-        if: github.event_name == 'release'
+      - name: Prepare artifact
         run: |
           mkdir "$asset_name"
           mv "$target_path" "$asset_name"
           cp README.md LICENSE CHANGELOG.md "$asset_name"
-          zip -r "$asset_name".zip "$asset_name"
-          gh release upload "$tag" "$asset_name".zip
+        env:
+          target_path: target/${{ matrix.target }}/release/s3invsync${{ matrix.suffix }}
+          asset_name: s3invsync-${{ matrix.target }}
+
+      - name: Zip artifact (Unix)
+        if: "!startsWith(matrix.os, 'windows')"
+        run: zip -r "$asset_name".zip "$asset_name"
+        env:
+          asset_name: s3invsync-${{ matrix.target }}
+
+      - name: Zip artifact (Windows)
+        if: "startsWith(matrix.os, 'windows')"
+        run: Compress-Archive -Path s3invsync-${{ matrix.target }}/* -Destination s3invsync-${{ matrix.target }}.zip
+        shell: powershell
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: s3invsync-${{ matrix.target }}.zip
+          path: s3invsync-${{ matrix.target }}.zip
+
+      - name: Upload release asset
+        if: github.event_name == 'release'
+        run: gh release upload "$tag" "$asset_name".zip
         env:
           tag: ${{ github.event.release.tag_name }}
-          target_path: target/${{ matrix.target }}/release/s3invsync${{ matrix.suffix }}
           asset_name: s3invsync-${{ matrix.target }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
