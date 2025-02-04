@@ -5,15 +5,19 @@ mod keypath;
 mod manifest;
 mod nursery;
 mod s3;
+mod statefile;
 mod syncer;
 mod timestamps;
 mod util;
 use crate::errorset::ErrorSet;
 use crate::s3::{get_bucket_region, S3Client, S3Location};
+use crate::statefile::StateFileManager;
 use crate::syncer::Syncer;
 use crate::timestamps::DateMaybeHM;
+use crate::util::is_empty_dir;
 use anyhow::Context;
 use clap::Parser;
+use fs_err::PathExt;
 use futures_util::TryStreamExt;
 use std::io::{stderr, IsTerminal};
 use std::num::NonZeroUsize;
@@ -27,6 +31,11 @@ use tracing_subscriber::{filter::Targets, fmt::time::OffsetTime, prelude::*};
 #[derive(Clone, Debug, Parser)]
 #[command(version = env!("VERSION_WITH_GIT"))]
 struct Arguments {
+    /// If OUTDIR is nonempty and does not contain an `.s3invsync.state.json`
+    /// file, run the backup anyway instead of erroring out.
+    #[arg(long)]
+    allow_new_nonempty: bool,
+
     /// Instead of emitting a log message for each object skipped by
     /// `--path-filter`, emit one message for every `N` objects skipped.
     #[arg(long, value_name = "N")]
@@ -82,6 +91,11 @@ struct Arguments {
     /// Only download objects whose keys match the given regular expression
     #[arg(long, value_name = "REGEX")]
     path_filter: Option<regex::Regex>,
+
+    /// Error out immediately if the most recent backup did not complete
+    /// successfully
+    #[arg(long)]
+    require_last_success: bool,
 
     /// Emit download progress information at TRACE level
     #[arg(long)]
@@ -162,6 +176,13 @@ async fn run(args: Arguments) -> anyhow::Result<()> {
         };
         let jobs = args.jobs()?;
         let start_time = std::time::Instant::now();
+        tracing::trace!(path = %outdir.display(), "Creating root output directory");
+        fs_err::create_dir_all(&outdir)?;
+        let sfm = StateFileManager::new(&outdir);
+        if !args.allow_new_nonempty && !is_empty_dir(&outdir)? && !sfm.path().fs_err_try_exists()? {
+            anyhow::bail!("Backup directory is nonempty and does not contain a .s3invsync.state.json file; pass --allow-new-nonempty to run anyway");
+        }
+        sfm.start(args.require_last_success)?;
         let client = args.get_client().await?;
         tracing::info!("Fetching manifest ...");
         let (manifest, manifest_date) = client.get_manifest_for_date(args.date).await?;
@@ -177,6 +198,7 @@ async fn run(args: Arguments) -> anyhow::Result<()> {
         );
         tracing::info!("Starting backup ...");
         syncer.run(manifest).await?;
+        sfm.end()?;
         tracing::info!("Backup complete");
     }
     Ok(())
