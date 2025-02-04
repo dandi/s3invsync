@@ -1,7 +1,7 @@
 [![Project Status: WIP – Initial development is in progress, but there has not yet been a stable, usable release suitable for the public.](https://www.repostatus.org/badges/latest/wip.svg)](https://www.repostatus.org/#wip)
 [![CI Status](https://github.com/dandi/s3invsync/actions/workflows/test.yml/badge.svg)](https://github.com/dandi/s3invsync/actions/workflows/test.yml)
 [![codecov.io](https://codecov.io/gh/dandi/s3invsync/branch/main/graph/badge.svg)](https://codecov.io/gh/dandi/s3invsync)
-[![Minimum Supported Rust Version](https://img.shields.io/badge/MSRV-1.81-orange)](https://www.rust-lang.org)
+[![Minimum Supported Rust Version](https://img.shields.io/badge/MSRV-1.82-orange)](https://www.rust-lang.org)
 [![MIT License](https://img.shields.io/github/license/dandi/s3invsync.svg)](https://opensource.org/licenses/MIT)
 
 [GitHub](https://github.com/dandi/s3invsync) | [Issues](https://github.com/dandi/s3invsync/issues) | [Changelog](https://github.com/dandi/s3invsync/blob/main/CHANGELOG.md)
@@ -102,6 +102,11 @@ listed in the inventory and are not `.s3invsync.*` files are deleted.
 Options
 -------
 
+- `--allow-new-nonempty` — By default, if `<outdir>` is nonempty and does not
+  contain an `.s3invsync.state.json` file, `s3invsync` will assume you're
+  trying to backup to a non-backup directory and error out.  Pass this option
+  to disable this check.
+
 - `--compress-filter-msgs <N>` — Instead of emitting a log message for each
   object skipped by `--path-filter`, emit one message for every `<N>` objects
   skipped.
@@ -145,6 +150,10 @@ Options
 
 - `--path-filter <REGEX>` — Only download objects whose keys match the given
   [regular expression](https://docs.rs/regex/latest/regex/#syntax)
+
+- `--require-last-success` — Error out immediately if the
+  `.s3invsync.state.json` file indicates that the most recent backup did not
+  complete successfully
 
 - `--trace-progress` — Emit per-object download progress at the TRACE level.
   (Note that you still need to specify `--log-level TRACE` separately in order

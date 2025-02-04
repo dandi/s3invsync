@@ -7,7 +7,7 @@ In Development
   favor of a new `--jobs` option
 - Files & directories in the backup tree that are not listed in the inventory
   are deleted
-- Increased MSRV to 1.81
+- Increased MSRV to 1.82
 - The temporary file used to download a manifest is now deleted immediately
   after parsing the manifest
 - The default `--jobs` value now equals the number of available CPU cores or
@@ -15,6 +15,10 @@ In Development
 - Add `--ok-errors` option
 - Store start & successful end times of program runs in `.s3invsync.state.json`
 - Support objects without version IDs
+- Error out immediately if outdir is nonempty and does not contain an
+  `.s3invsync.state.json` file
+    - Added `--allow-new-nonempty` option to disable this check
+- Add `--require-last-success` option
 
 v0.1.0-alpha.2 (2025-01-06)
 ---------------------------

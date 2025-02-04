@@ -6,15 +6,19 @@ use std::path::{Path, PathBuf};
 use time::OffsetDateTime;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(super) struct StateFileManager {
+pub(crate) struct StateFileManager {
     path: PathBuf,
 }
 
 impl StateFileManager {
-    pub(super) fn new(outdir: &Path) -> Self {
+    pub(crate) fn new(outdir: &Path) -> Self {
         StateFileManager {
             path: outdir.join(format!("{RESERVED_PREFIX}.state.json")),
         }
+    }
+
+    pub(crate) fn path(&self) -> &Path {
+        &self.path
     }
 
     fn load(&self) -> anyhow::Result<State> {
@@ -58,13 +62,23 @@ impl StateFileManager {
         Ok(())
     }
 
-    pub(super) fn register_start(&self) -> anyhow::Result<()> {
+    pub(crate) fn start(&self, require_last_success: bool) -> anyhow::Result<()> {
         let mut state = self.load()?;
+        if require_last_success {
+            if let Some(last_start) = state.last_backup_started {
+                if state
+                    .last_successful_backup_finished
+                    .is_none_or(|ts| ts < last_start)
+                {
+                    anyhow::bail!("Previous backup did not complete successfully");
+                }
+            }
+        }
         state.last_backup_started = Some(OffsetDateTime::now_utc());
         self.store(state)
     }
 
-    pub(super) fn register_end(&self) -> anyhow::Result<()> {
+    pub(crate) fn end(&self) -> anyhow::Result<()> {
         let mut state = self.load()?;
         state.last_successful_backup_finished = Some(OffsetDateTime::now_utc());
         self.store(state)
