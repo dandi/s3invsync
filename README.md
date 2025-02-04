@@ -1,10 +1,10 @@
-[![Project Status: WIP – Initial development is in progress, but there has not yet been a stable, usable release suitable for the public.](https://www.repostatus.org/badges/latest/wip.svg)](https://www.repostatus.org/#wip)
+[![Project Status: Inactive – The project has reached a stable, usable state but is no longer being actively developed; support/maintenance will be provided as time allows.](https://www.repostatus.org/badges/latest/inactive.svg)](https://www.repostatus.org/#inactive)
 [![CI Status](https://github.com/dandi/s3invsync/actions/workflows/test.yml/badge.svg)](https://github.com/dandi/s3invsync/actions/workflows/test.yml)
 [![codecov.io](https://codecov.io/gh/dandi/s3invsync/branch/main/graph/badge.svg)](https://codecov.io/gh/dandi/s3invsync)
 [![Minimum Supported Rust Version](https://img.shields.io/badge/MSRV-1.82-orange)](https://www.rust-lang.org)
 [![MIT License](https://img.shields.io/github/license/dandi/s3invsync.svg)](https://opensource.org/licenses/MIT)
 
-[GitHub](https://github.com/dandi/s3invsync) | [Issues](https://github.com/dandi/s3invsync/issues) | [Changelog](https://github.com/dandi/s3invsync/blob/main/CHANGELOG.md)
+[GitHub](https://github.com/dandi/s3invsync) | [crates.io](https://crates.io/crates/s3invsync) | [Issues](https://github.com/dandi/s3invsync/issues) | [Changelog](https://github.com/dandi/s3invsync/blob/main/CHANGELOG.md)
 
 `s3invsync` is a [Rust](https://www.rust-lang.org) program for creating &
 syncing backups of an AWS S3 bucket (including old versions of objects) by
@@ -15,15 +15,14 @@ making use of the bucket's [Amazon S3 Inventory][inv] files.
 Currently, only S3 Inventories with CSV output files are supported, and the
 CSVs are required to list at least the `Bucket`, `Key`, and `ETag` fields.
 
-**Warning:** This is an in-development program.  They may be bugs, and some
-planned features have not been implemented yet.
-
 
 Installation
 ============
 
 Installing the Latest Release
 -----------------------------
+
+### Release Assets
 
 `s3invsync` provides pre-built binaries for the most common platforms as GitHub
 release assets.  Simply download the asset for your platform from the latest
@@ -35,7 +34,16 @@ Alternatively, if you have
 [`cargo-binstall`](https://github.com/cargo-bins/cargo-binstall), you can
 install or update to the latest release asset with a single command:
 
-    cargo binstall --git https://github.com/dandi/s3invsync s3invsync
+    cargo binstall s3invsync
+
+### Installing from Source
+
+If you have [Rust and Cargo
+installed](https://www.rust-lang.org/tools/install), you can build the latest
+release of `s3invsync` from source and install it in `~/.cargo/bin` by running:
+
+    cargo install s3invsync
+
 
 Installing the Latest Development Code
 --------------------------------------
@@ -51,11 +59,11 @@ See the [`cargo
 install`](https://doc.rust-lang.org/cargo/commands/cargo-install.html)
 documentation for further options.
 
-Alternatively, you can clone this repository manually and then build a binary
-localized to the clone by running `cargo build` (or `cargo build --release` to
-enable optimizations) inside it.  The resulting binary can then be run with
-`cargo run -- <arguments>` (or `cargo run --release -- <arguments>` to use
-optimizations).  The binary file itself is located at either
+Alternatively, you can clone `s3invsync`'s repository manually and then build a
+binary localized to the clone by running `cargo build` (or `cargo build
+--release` to enable optimizations) inside it.  The resulting binary can then
+be run with `cargo run -- <arguments>` (or `cargo run --release -- <arguments>`
+to use optimizations).  The binary file itself is located at either
 `target/debug/s3invsync` or `target/release/s3invsync`, depending on whether
 `--release` was supplied.  See the [`cargo
 build`](https://doc.rust-lang.org/cargo/commands/cargo-build.html) and [`cargo
