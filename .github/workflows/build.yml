@@ -89,10 +89,20 @@ jobs:
           mkdir "$asset_name"
           mv "$target_path" "$asset_name"
           cp README.md LICENSE CHANGELOG.md "$asset_name"
-          zip -r "$asset_name".zip "$asset_name"
         env:
           target_path: target/${{ matrix.target }}/release/s3invsync${{ matrix.suffix }}
           asset_name: s3invsync-${{ matrix.target }}
+
+      - name: Zip artifact (Unix)
+        if: "!startsWith(matrix.os, 'windows')"
+        run: zip -r "$asset_name".zip "$asset_name"
+        env:
+          asset_name: s3invsync-${{ matrix.target }}
+
+      - name: Zip artifact (Windows)
+        if: "startsWith(matrix.os, 'windows')"
+        run: Compress-Archive -Path s3invsync-${{ matrix.target }}/* -Destination s3invsync-${{ matrix.target }}.zip
+        shell: powershell
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
