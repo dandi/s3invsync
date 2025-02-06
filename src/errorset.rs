@@ -4,6 +4,10 @@ use thiserror::Error;
 /// non-fatal during backup
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct ErrorSet {
+    /// If true, then a 403 error upon attempting to download an object is not
+    /// fatal.
+    pub(crate) access_denied: bool,
+
     /// If true, then an invalid entry in an inventory list file is not fatal.
     pub(crate) invalid_entry: bool,
 
@@ -15,6 +19,7 @@ pub(crate) struct ErrorSet {
 impl ErrorSet {
     fn all() -> ErrorSet {
         ErrorSet {
+            access_denied: true,
             invalid_entry: true,
             missing_old_version: true,
         }
@@ -28,6 +33,7 @@ impl std::str::FromStr for ErrorSet {
         let mut errset = ErrorSet::default();
         for word in s.split(',').map(str::trim) {
             match word {
+                "access-denied" => errset.access_denied = true,
                 "invalid-entry" => errset.invalid_entry = true,
                 "missing-old-version" => errset.missing_old_version = true,
                 "all" => errset = ErrorSet::all(),

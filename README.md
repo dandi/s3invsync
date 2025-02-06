@@ -147,6 +147,8 @@ Options
   This option takes a comma-separated list of one or more of the following
   error types:
 
+  - `access-denied` — a 403 occurred while trying to download an object
+
   - `invalid-entry` — an entry in an inventory list file is invalid
 
   - `missing-old-version` — a 404 occurred while trying to download a

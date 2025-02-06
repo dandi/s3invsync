@@ -385,6 +385,10 @@ impl Syncer {
                         mdmanager.set(md).await.with_context(|| {
                             format!("failed to set local metadata for {}", item.url())
                         })?;
+                    } else if !self.token.is_cancelled() {
+                        mdmanager.delete().await.with_context(|| {
+                            format!("failed to delete local metadata for {}", item.url())
+                        })?;
                     }
                 }
             } else {
@@ -496,6 +500,17 @@ impl Syncer {
             {
                 let e = anyhow::Error::from(e);
                 tracing::warn!(error = ?e, "object not found; ignoring");
+                if let Err(e2) = self.cleanup_download_path(item, outfile, &path) {
+                    tracing::warn!(error = ?e2, "Failed to clean up download path");
+                }
+                Ok(false)
+            }
+            Some(Err(e))
+                if matches!(e, DownloadError::Get(ref ge) if ge.is_403())
+                    && self.ok_errors.access_denied =>
+            {
+                let e = anyhow::Error::from(e);
+                tracing::warn!(error = ?e, "access to object denied; ignoring");
                 if let Err(e2) = self.cleanup_download_path(item, outfile, &path) {
                     tracing::warn!(error = ?e2, "Failed to clean up download path");
                 }
