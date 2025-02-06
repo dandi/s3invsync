@@ -509,8 +509,20 @@ pub(crate) struct GetError {
 }
 
 impl GetError {
+    fn status_code(&self) -> Option<u16> {
+        if let SdkError::ServiceError(ref e) = self.source {
+            Some(e.raw().status().as_u16())
+        } else {
+            None
+        }
+    }
+
+    pub(crate) fn is_403(&self) -> bool {
+        self.status_code() == Some(403)
+    }
+
     pub(crate) fn is_404(&self) -> bool {
-        matches!(self.source, SdkError::ServiceError(ref e) if e.raw().status().as_u16() == 404)
+        self.status_code() == Some(404)
     }
 }
 
