@@ -1,6 +1,6 @@
 In Development
 --------------
-- Add `access-denied` item to `--ok-errors`
+- Add `access-denied` and `invalid-object-state` items to `--ok-errors`
 
 v0.1.0 (2025-02-04)
 -------------------
