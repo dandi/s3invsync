@@ -524,6 +524,14 @@ impl GetError {
     pub(crate) fn is_404(&self) -> bool {
         self.status_code() == Some(404)
     }
+
+    pub(crate) fn is_invalid_object_state(&self) -> bool {
+        if let SdkError::ServiceError(ref e) = self.source {
+            matches!(e.err(), GetObjectError::InvalidObjectState(_))
+        } else {
+            false
+        }
+    }
 }
 
 /// Determine the region that the given S3 bucket belongs to

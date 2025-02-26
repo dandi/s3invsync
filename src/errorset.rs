@@ -11,6 +11,10 @@ pub(crate) struct ErrorSet {
     /// If true, then an invalid entry in an inventory list file is not fatal.
     pub(crate) invalid_entry: bool,
 
+    /// If true, then an `InvalidObjectState` error from S3 upon attempting to
+    /// download an object is not fatal.
+    pub(crate) invalid_object_state: bool,
+
     /// If true, then a 404 error upon attempting to download a non-latest
     /// version of a key is not fatal.
     pub(crate) missing_old_version: bool,
@@ -21,6 +25,7 @@ impl ErrorSet {
         ErrorSet {
             access_denied: true,
             invalid_entry: true,
+            invalid_object_state: true,
             missing_old_version: true,
         }
     }
@@ -35,6 +40,7 @@ impl std::str::FromStr for ErrorSet {
             match word {
                 "access-denied" => errset.access_denied = true,
                 "invalid-entry" => errset.invalid_entry = true,
+                "invalid-object-state" => errset.invalid_object_state = true,
                 "missing-old-version" => errset.missing_old_version = true,
                 "all" => errset = ErrorSet::all(),
                 s => return Err(ParseErrorSetError(s.to_owned())),

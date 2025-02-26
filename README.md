@@ -151,6 +151,9 @@ Options
 
   - `invalid-entry` — an entry in an inventory list file is invalid
 
+  - `invalid-object-state` — S3 returned an `InvalidObjectState` error upon
+    attempting to download an object, usually because the object is archived
+
   - `missing-old-version` — a 404 occurred while trying to download a
     non-latest version of a key
 

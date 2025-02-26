@@ -516,6 +516,17 @@ impl Syncer {
                 }
                 Ok(false)
             }
+            Some(Err(e))
+                if matches!(e, DownloadError::Get(ref ge) if ge.is_invalid_object_state())
+                    && self.ok_errors.invalid_object_state =>
+            {
+                let e = anyhow::Error::from(e);
+                tracing::warn!(error = ?e, "invalid objects state; ignoring");
+                if let Err(e2) = self.cleanup_download_path(item, outfile, &path) {
+                    tracing::warn!(error = ?e2, "Failed to clean up download path");
+                }
+                Ok(false)
+            }
             Some(Err(e)) => {
                 let e = anyhow::Error::from(e);
                 tracing::error!(error = ?e, "Failed to download object");
