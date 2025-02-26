@@ -1,3 +1,5 @@
+use crate::s3::DownloadError;
+use std::fmt;
 use thiserror::Error;
 
 /// A set of flags denoting which types of errors should be regarded as
@@ -21,6 +23,25 @@ pub(crate) struct ErrorSet {
 }
 
 impl ErrorSet {
+    pub(crate) fn download_error_to_warning(
+        &self,
+        e: &DownloadError,
+        is_old_version: bool,
+    ) -> Option<DownloadWarning> {
+        let DownloadError::Get(ref ge) = e else {
+            return None;
+        };
+        if ge.is_404() && self.missing_old_version && is_old_version {
+            Some(DownloadWarning::MissingOldVersion)
+        } else if ge.is_403() && self.access_denied {
+            Some(DownloadWarning::AccessDenied)
+        } else if ge.is_invalid_object_state() && self.invalid_object_state {
+            Some(DownloadWarning::InvalidObjectState)
+        } else {
+            None
+        }
+    }
+
     fn all() -> ErrorSet {
         ErrorSet {
             access_denied: true,
@@ -53,3 +74,20 @@ impl std::str::FromStr for ErrorSet {
 #[derive(Clone, Debug, Eq, Error, PartialEq)]
 #[error("invalid error type {0:?}")]
 pub(crate) struct ParseErrorSetError(String);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum DownloadWarning {
+    AccessDenied,
+    InvalidObjectState,
+    MissingOldVersion,
+}
+
+impl fmt::Display for DownloadWarning {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            DownloadWarning::AccessDenied => write!(f, "access to object denied"),
+            DownloadWarning::InvalidObjectState => write!(f, "invalid object state"),
+            DownloadWarning::MissingOldVersion => write!(f, "old version of object not found"),
+        }
+    }
+}

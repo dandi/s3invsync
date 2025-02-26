@@ -8,7 +8,7 @@ use crate::inventory::{CsvReaderError, InventoryEntry, InventoryItem, ItemDetail
 use crate::keypath::is_special_component;
 use crate::manifest::{CsvManifest, FileSpec};
 use crate::nursery::{Nursery, NurseryStream};
-use crate::s3::{DownloadError, S3Client};
+use crate::s3::S3Client;
 use crate::timestamps::DateHM;
 use crate::util::*;
 use anyhow::Context;
@@ -493,47 +493,21 @@ impl Syncer {
                 }
                 Ok(true)
             }
-            Some(Err(e))
-                if matches!(e, DownloadError::Get(ref ge) if ge.is_404())
-                    && self.ok_errors.missing_old_version
-                    && is_old =>
-            {
-                let e = anyhow::Error::from(e);
-                tracing::warn!(error = ?e, "object not found; ignoring");
-                if let Err(e2) = self.cleanup_download_path(item, outfile, &path) {
-                    tracing::warn!(error = ?e2, "Failed to clean up download path");
-                }
-                Ok(false)
-            }
-            Some(Err(e))
-                if matches!(e, DownloadError::Get(ref ge) if ge.is_403())
-                    && self.ok_errors.access_denied =>
-            {
-                let e = anyhow::Error::from(e);
-                tracing::warn!(error = ?e, "access to object denied; ignoring");
-                if let Err(e2) = self.cleanup_download_path(item, outfile, &path) {
-                    tracing::warn!(error = ?e2, "Failed to clean up download path");
-                }
-                Ok(false)
-            }
-            Some(Err(e))
-                if matches!(e, DownloadError::Get(ref ge) if ge.is_invalid_object_state())
-                    && self.ok_errors.invalid_object_state =>
-            {
-                let e = anyhow::Error::from(e);
-                tracing::warn!(error = ?e, "invalid objects state; ignoring");
-                if let Err(e2) = self.cleanup_download_path(item, outfile, &path) {
-                    tracing::warn!(error = ?e2, "Failed to clean up download path");
-                }
-                Ok(false)
-            }
             Some(Err(e)) => {
-                let e = anyhow::Error::from(e);
-                tracing::error!(error = ?e, "Failed to download object");
+                let r = if let Some(warning) = self.ok_errors.download_error_to_warning(&e, is_old)
+                {
+                    let e = anyhow::Error::from(e);
+                    tracing::warn!(error = ?e, "{warning}; ignoring");
+                    Ok(false)
+                } else {
+                    let e = anyhow::Error::from(e);
+                    tracing::error!(error = ?e, "Failed to download object");
+                    Err(e)
+                };
                 if let Err(e2) = self.cleanup_download_path(item, outfile, &path) {
                     tracing::warn!(error = ?e2, "Failed to clean up download path");
                 }
-                Err(e)
+                r
             }
             None => {
                 tracing::debug!("Download cancelled");
