@@ -51,6 +51,31 @@ struct Arguments {
     #[arg(short, long)]
     date: Option<DateMaybeHM>,
 
+    /// Treat the given error types as non-fatal.
+    ///
+    /// If one of the specified types of errors occurs, a warning is emitted,
+    /// and the error is otherwise ignored.
+    ///
+    /// This option takes a comma-separated list of one or more of the
+    /// following error types:
+    ///
+    /// - access-denied — a 403 occurred while trying to download an object
+    ///
+    /// - invalid-entry — an entry in an inventory list file is invalid
+    ///
+    /// - invalid-object-state — S3 returned an `InvalidObjectState` error upon
+    ///   attempting to download an object, usually because the object is
+    ///   archived
+    ///
+    /// - missing-old-version — a 404 occurred while trying to download a
+    ///   non-latest version of a key
+    ///
+    /// - all — same as listing all of the above error types
+    ///
+    /// By default, all of the above error types are fatal.
+    #[arg(long, value_name = "LIST")]
+    ignore_errors: Option<ErrorSet>,
+
     /// Set the maximum number of concurrent download jobs.  Defaults to the
     /// number of available CPU cores, or 20, whichever is lower.
     #[arg(short = 'J', long)]
@@ -69,23 +94,13 @@ struct Arguments {
     )]
     log_level: Level,
 
-    /// Treat the given error types as non-fatal.
-    ///
-    /// If one of the specified types of errors occurs, a warning is emitted,
-    /// and the error is otherwise ignored.
-    ///
-    /// This option takes a comma-separated list of one or more of the
-    /// following error types:
-    ///
-    /// - invalid-entry — an entry in an inventory list file is invalid
-    ///
-    /// - missing-old-version — a 404 occurred while trying to download a
-    ///   non-latest version of a key
-    ///
-    /// - all — same as listing all of the above error types
-    ///
-    /// By default, all of the above error types are fatal.
-    #[arg(long, value_name = "LIST")]
+    /// Deprecated since v0.2.0.  Use `--ignore-errors` instead.
+    #[arg(
+        long,
+        value_name = "LIST",
+        hide = true,
+        conflicts_with = "ignore_errors"
+    )]
     ok_errors: Option<ErrorSet>,
 
     /// Only download objects whose keys match the given regular expression
@@ -174,6 +189,14 @@ async fn run(args: Arguments) -> anyhow::Result<()> {
         let Some(outdir) = args.outdir.clone() else {
             anyhow::bail!("missing required OUTDIR argument");
         };
+        let ignore_errors = if let Some(ie) = args.ignore_errors {
+            ie
+        } else if let Some(ie) = args.ok_errors {
+            tracing::warn!("--ok-errors is deprecated; use --ignore-errors instead");
+            ie
+        } else {
+            ErrorSet::default()
+        };
         let jobs = args.jobs()?;
         let start_time = std::time::Instant::now();
         tracing::trace!(path = %outdir.display(), "Creating root output directory");
@@ -194,7 +217,7 @@ async fn run(args: Arguments) -> anyhow::Result<()> {
             jobs,
             args.path_filter,
             args.compress_filter_msgs,
-            args.ok_errors.unwrap_or_default(),
+            ignore_errors,
         );
         tracing::info!("Starting backup ...");
         syncer.run(manifest).await?;
