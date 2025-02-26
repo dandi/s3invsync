@@ -1,6 +1,6 @@
 [package]
 name = "s3invsync"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 rust-version = "1.82"
 description = "AWS S3 Inventory-based backup tool with efficient incremental & versionId support"

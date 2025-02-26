@@ -1,5 +1,5 @@
-In Development
---------------
+v0.2.0 (2025-02-26)
+-------------------
 - `--ok-errors` renamed to `--ignore-errors`; the old name remains usable but
   is deprecated.
 - Add `access-denied` and `invalid-object-state` items to `--ignore-errors`
