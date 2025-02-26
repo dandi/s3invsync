@@ -77,7 +77,7 @@ pub(crate) struct Syncer {
 
     /// Which errors should be warned about and discarded rather than causing a
     /// shutdown
-    ok_errors: ErrorSet,
+    ignore_errors: ErrorSet,
 }
 
 impl Syncer {
@@ -90,7 +90,7 @@ impl Syncer {
         jobs: NonZeroUsize,
         path_filter: Option<regex::Regex>,
         compress_filter_msgs: Option<NonZeroUsize>,
-        ok_errors: ErrorSet,
+        ignore_errors: ErrorSet,
     ) -> Arc<Syncer> {
         let (obj_sender, obj_receiver) = async_channel::bounded(CHANNEL_SIZE);
         Arc::new(Syncer {
@@ -106,7 +106,7 @@ impl Syncer {
             obj_receiver,
             terminated: AtomicBool::new(false),
             filterlog: FilterLogger::new(compress_filter_msgs),
-            ok_errors,
+            ignore_errors,
         })
     }
 
@@ -182,7 +182,7 @@ impl Syncer {
                                     return Ok(());
                                 }
                             }
-                            Err(e) if matches!(e.source, CsvReaderError::Parse(_)) && this.ok_errors.invalid_entry => {
+                            Err(e) if matches!(e.source, CsvReaderError::Parse(_)) && this.ignore_errors.invalid_entry => {
                                 let e = anyhow::Error::from(e);
                                 tracing::warn!(error = ?e, "invalid entry in inventory list file; ignoring");
                             }
@@ -494,7 +494,8 @@ impl Syncer {
                 Ok(true)
             }
             Some(Err(e)) => {
-                let r = if let Some(warning) = self.ok_errors.download_error_to_warning(&e, is_old)
+                let r = if let Some(warning) =
+                    self.ignore_errors.download_error_to_warning(&e, is_old)
                 {
                     let e = anyhow::Error::from(e);
                     tracing::warn!(error = ?e, "{warning}; ignoring");

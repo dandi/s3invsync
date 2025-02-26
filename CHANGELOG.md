@@ -1,6 +1,8 @@
 In Development
 --------------
-- Add `access-denied` and `invalid-object-state` items to `--ok-errors`
+- `--ok-errors` renamed to `--ignore-errors`; the old name remains usable but
+  is deprecated.
+- Add `access-denied` and `invalid-object-state` items to `--ignore-errors`
 
 v0.1.0 (2025-02-04)
 -------------------

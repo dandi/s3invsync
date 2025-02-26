@@ -128,21 +128,9 @@ Options
   inventory for the given date is used) or in the format `YYYY-MM-DDTHH-MMZ`
   (to specify a specific inventory).
 
-- `-J <INT>`, `--jobs <INT>` — Specify the maximum number of concurrent
-  download jobs.  Defaults to the number of available CPU cores, or 20,
-  whichever is lower.
-
-- `--list-dates` — List available inventory manifest dates instead of
-  backing anything up.  When this option is given, the `<outdir>` argument is
-  optional and does nothing.
-
-- `-l <level>`, `--log-level <level>` — Set the log level to the given value.
-  Possible values are  "`ERROR`", "`WARN`", "`INFO`", "`DEBUG`", and "`TRACE`"
-  (all case-insensitive).  [default value: `DEBUG`]
-
-- `--ok-errors <list>` — Treat the given error types as non-fatal.  If one of
-  the specified types of errors occurs, a warning is emitted, and the error is
-  otherwise ignored.
+- `--ignore-errors <list>` — Treat the given error types as non-fatal.  If one
+  of the specified types of errors occurs, a warning is emitted, and the error
+  is otherwise ignored.
 
   This option takes a comma-separated list of one or more of the following
   error types:
@@ -160,6 +148,18 @@ Options
   - `all` — same as listing all of the above error types
 
   By default, all of the above error types are fatal.
+
+- `-J <INT>`, `--jobs <INT>` — Specify the maximum number of concurrent
+  download jobs.  Defaults to the number of available CPU cores, or 20,
+  whichever is lower.
+
+- `--list-dates` — List available inventory manifest dates instead of
+  backing anything up.  When this option is given, the `<outdir>` argument is
+  optional and does nothing.
+
+- `-l <level>`, `--log-level <level>` — Set the log level to the given value.
+  Possible values are  "`ERROR`", "`WARN`", "`INFO`", "`DEBUG`", and "`TRACE`"
+  (all case-insensitive).  [default value: `DEBUG`]
 
 - `--path-filter <REGEX>` — Only download objects whose keys match the given
   [regular expression](https://docs.rs/regex/latest/regex/#syntax)
