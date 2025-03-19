@@ -1,3 +1,9 @@
+In Development
+--------------
+- When cleaning up after failing to download an object, do not delete empty
+  parent directories of the output path.  This fixes a fatal bug that can occur
+  when using `--ignore-errors`.
+
 v0.2.0 (2025-02-26)
 -------------------
 - `--ok-errors` renamed to `--ignore-errors`; the old name remains usable but

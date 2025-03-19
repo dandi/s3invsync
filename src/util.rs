@@ -51,18 +51,6 @@ pub(crate) fn is_empty_dir(p: &Path) -> std::io::Result<bool> {
     }
 }
 
-/// Deletes the directory `topdir` and all of its parent directories up to —
-/// but not including — `rootdir`, so long as each is empty.
-pub(crate) fn rmdir_to_root(topdir: &Path, rootdir: &Path) -> std::io::Result<()> {
-    for p in topdir.ancestors() {
-        if p == rootdir || !is_empty_dir(p)? {
-            break;
-        }
-        suppress_error_kind(fs_err::remove_dir(p), ErrorKind::NotFound)?;
-    }
-    Ok(())
-}
-
 /// If `p` is a directory or a symlink, delete it.  Returns `true` if `p`
 /// exists afterwards.
 pub(crate) async fn ensure_file(p: &Path) -> anyhow::Result<bool> {
@@ -127,47 +115,4 @@ pub(crate) fn make_old_filename(basename: &str, version_id: Option<&str>, etag: 
         "{basename}.old.{v}.{etag}",
         v = version_id.unwrap_or("null")
     )
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    mod rmdir_to_root {
-        use super::*;
-        use fs_err::PathExt;
-        use tempfile::tempdir;
-
-        #[test]
-        fn empty_tree() {
-            let root = tempdir().unwrap();
-            let topdir = root.path().join("apple").join("banana").join("coconut");
-            fs_err::create_dir_all(&topdir).unwrap();
-            rmdir_to_root(&topdir, root.path()).unwrap();
-            assert!(is_empty_dir(root.path()).unwrap());
-        }
-
-        #[test]
-        fn file_in_topdir() {
-            let root = tempdir().unwrap();
-            let topdir = root.path().join("apple").join("banana").join("coconut");
-            let filepath = topdir.join("file.txt");
-            fs_err::create_dir_all(&topdir).unwrap();
-            fs_err::write(&filepath, b"This is test text.\n").unwrap();
-            rmdir_to_root(&topdir, root.path()).unwrap();
-            assert!(filepath.fs_err_try_exists().unwrap());
-        }
-
-        #[test]
-        fn file_above_topdir() {
-            let root = tempdir().unwrap();
-            let topdir = root.path().join("apple").join("banana").join("coconut");
-            let filepath = root.path().join("apple").join("banana").join("file.txt");
-            fs_err::create_dir_all(&topdir).unwrap();
-            fs_err::write(&filepath, b"This is test text.\n").unwrap();
-            rmdir_to_root(&topdir, root.path()).unwrap();
-            assert!(filepath.fs_err_try_exists().unwrap());
-            assert!(!topdir.fs_err_try_exists().unwrap());
-        }
-    }
 }

@@ -525,7 +525,6 @@ impl Syncer {
         outfile: tempfile::NamedTempFile,
         dlfile: &Path,
     ) -> anyhow::Result<()> {
-        // TODO: Synchronize calls to this method?
         tracing::debug!("Cleaning up unfinished download file");
         outfile.close().with_context(|| {
             format!(
@@ -533,10 +532,6 @@ impl Syncer {
                 item.url()
             )
         })?;
-        if let Some(dirpath) = dlfile.parent() {
-            rmdir_to_root(dirpath, &self.outdir)?;
-        }
-        tracing::debug!("Finished cleaning up unfinished download file");
         Ok(())
     }
 
