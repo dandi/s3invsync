@@ -59,7 +59,7 @@ jobs:
         || contains(github.event.pull_request.labels.*.name, 'buildme')
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@master
