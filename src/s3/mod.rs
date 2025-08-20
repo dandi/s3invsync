@@ -372,11 +372,17 @@ pub(crate) enum TempfileError {
 pub(crate) enum FindManifestError {
     /// An error occurred while listing the manifest directories
     #[error(transparent)]
-    List(#[from] ListObjectsError),
+    List(Box<ListObjectsError>),
 
     /// No matching manifests were found
     #[error("no manifests found in {url}")]
     NoMatch { url: S3Location },
+}
+
+impl From<ListObjectsError> for FindManifestError {
+    fn from(e: ListObjectsError) -> FindManifestError {
+        FindManifestError::List(Box::new(e))
+    }
 }
 
 /// Error returned by [`S3Client::get_manifest_for_date()`] and
@@ -389,7 +395,7 @@ pub(crate) enum GetManifestError {
 
     /// Failed to perform a "Get Object" request for the manifest's checksum
     #[error(transparent)]
-    Get(#[from] GetError),
+    Get(Box<GetError>),
 
     /// Failed to download the manifest's checksum
     #[error("failed downloading checksum at {url}")]
@@ -428,12 +434,18 @@ pub(crate) enum GetManifestError {
     },
 }
 
+impl From<GetError> for GetManifestError {
+    fn from(e: GetError) -> GetManifestError {
+        GetManifestError::Get(Box::new(e))
+    }
+}
+
 /// Error returned by [`S3Client::download_object()`]
 #[derive(Debug, Error)]
 pub(crate) enum DownloadError {
     /// Failed to perform "Get Object" request
     #[error(transparent)]
-    Get(#[from] GetError),
+    Get(Box<GetError>),
 
     /// Error while receiving bytes for the object
     #[error("failed downloading contents for {url}")]
@@ -456,6 +468,12 @@ pub(crate) enum DownloadError {
         expected_md5: String,
         actual_md5: String,
     },
+}
+
+impl From<GetError> for DownloadError {
+    fn from(e: GetError) -> DownloadError {
+        DownloadError::Get(Box::new(e))
+    }
 }
 
 /// Error returned by [`S3Client::download_inventory_csv()`]
@@ -482,7 +500,7 @@ pub(crate) enum CsvDownloadError {
 pub(crate) enum CsvPeekError {
     /// Failed to perform "Get Object" request
     #[error(transparent)]
-    Get(#[from] GetError),
+    Get(Box<GetError>),
 
     /// Error while receiving bytes for the object
     #[error("failed downloading contents for {url}")]
@@ -497,6 +515,12 @@ pub(crate) enum CsvPeekError {
         url: S3Location,
         source: CsvReaderError,
     },
+}
+
+impl From<GetError> for CsvPeekError {
+    fn from(e: GetError) -> CsvPeekError {
+        CsvPeekError::Get(Box::new(e))
+    }
 }
 
 /// Error returned by [`S3Client::get_object()`] when a "Get Object" request
